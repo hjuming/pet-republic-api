@@ -24,26 +24,34 @@ jobs:
       - name: Install deps
         run: npm install
 
-      # ✅ 關鍵修正：用 binding 名稱 DATABASE，而不是 image-db
+      - name: Show wrangler config (debug)
+        run: |
+          echo "===== wrangler.toml ====="
+          cat wrangler.toml || true
+          echo "========================="
+          npx wrangler --version
+          npx wrangler whoami || true
+
+      # ✅ 這步會用 wrangler.toml 的 binding 名稱「DATABASE」
       - name: Apply D1 migrations (remote)
         shell: bash
         run: |
           if [ -d "migrations" ]; then
-            echo "🔧 Found migrations folder, applying to D1 (binding: DATABASE)..."
-            npx wrangler d1 migrations apply DATABASE --remote
+            echo "🔧 Applying D1 migrations to binding: DATABASE ..."
+            npx wrangler d1 migrations apply DATABASE --remote --config wrangler.toml
           else
             echo "⚠️ No migrations folder found. Skipping."
           fi
 
-      - name: Deploy Worker
-        run: npx wrangler deploy
+      - name: Deploy Worker (default env)
+        run: npx wrangler deploy --config wrangler.toml
 
       # （選用）把密鑰寫回 Worker，避免被覆蓋時遺失
       - name: Upload secrets to Worker
         shell: bash
         run: |
           set -euo pipefail
-          put_secret () { local NAME="$1"; local VALUE="$2"; if [ -n "$VALUE" ]; then echo "$VALUE" | npx wrangler secret put "$NAME"; else echo "Skip $NAME (empty)"; fi; }
+          put_secret () { local NAME="$1"; local VALUE="$2"; if [ -n "$VALUE" ]; then echo "$VALUE" | npx wrangler secret put "$NAME" --config wrangler.toml; else echo "Skip $NAME (empty)"; fi; }
           put_secret "USERNAME"               "${{ secrets.USERNAME }}"
           put_secret "PASSWORD"               "${{ secrets.PASSWORD }}"
           put_secret "AIRTABLE_API_TOKEN"     "${{ secrets.AIRTABLE_API_TOKEN }}"
