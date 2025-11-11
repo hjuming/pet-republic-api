@@ -1,399 +1,644 @@
-// ======== 工具 ========
-const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8" };
-const ALLOW_ORIGIN = "*"; // 前台取用 API
+// src/index.js
+// ============================================================
+// 🐾 寵兒共和國｜商品管理 API（D1 + R2）
+// - Basic Auth（變更資料/管理路徑需要）
+// - CORS（簡單可調整）
+// - Products / Product Images CRUD（D1）
+// - Public Image Gateway: https://image.wedo.pet/{SKU}/{filename} （R2）
+// ============================================================
 
-function ok(data, headers = {}) {
-  return new Response(JSON.stringify(data), {
-    headers: { ...JSON_HEADERS, "Access-Control-Allow-Origin": ALLOW_ORIGIN, ...headers },
-  });
-}
-function bad(msg, code = 400) {
-  return new Response(JSON.stringify({ ok: false, error: msg }), {
-    status: code,
-    headers: { ...JSON_HEADERS, "Access-Control-Allow-Origin": ALLOW_ORIGIN },
-  });
-}
-function notFound() { return bad("Not found", 404); }
-function methodNotAllowed() { return bad("Method not allowed", 405); }
+/**
+ * 環境需求（wrangler.toml）：
+ *  - d1_databases:  binding = "DATABASE"
+ *  - r2_buckets:   binding = "R2_BUCKET"
+ *  - vars:         ALLOWED_ORIGINS (optional), MAX_IMAGE_MB (optional)
+ *  - secrets:      USERNAME, PASSWORD
+ *  - （可選）Airtable：AIRTABLE_API_TOKEN, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME
+ */
 
-function requireBasicAuth(req, env) {
-  const hdr = req.headers.get("Authorization") || "";
-  if (!hdr.startsWith("Basic ")) return false;
-  const [u, p] = atob(hdr.slice(6)).split(":");
-  return u === env.USERNAME && p === env.PASSWORD;
-}
-
-function parseIntSafe(v, d = 0) {
-  const n = parseInt(v, 10);
-  return Number.isFinite(n) ? n : d;
-}
-
-function sanitizeFilename(name) {
-  // 僅允許英數、.、-、_，避免目錄跳脫與奇異字元
-  return name.replace(/[^A-Za-z0-9._-]/g, "_");
-}
-
-// ======== 後台頁面（/admin） ========
-function adminHtml() {
-  return `<!doctype html>
-<html lang="zh-Hant">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>寵兒共和國｜商品管理系統</title>
-<meta name="robots" content="noindex,nofollow"/>
-<script src="https://cdn.tailwindcss.com"></script>
-<style>body{font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",sans-serif}</style>
-</head>
-<body class="bg-slate-50">
-<div class="max-w-6xl mx-auto p-6">
-  <header class="flex items-center justify-between mb-6">
-    <h1 class="text-2xl font-bold">寵兒共和國｜商品管理</h1>
-    <span class="text-sm text-slate-500">僅內部使用（Basic Auth）</span>
-  </header>
-
-  <section class="mb-6 rounded-xl bg-white shadow p-4 border">
-    <h2 class="font-semibold mb-3">新增 / 更新商品</h2>
-    <form id="prodForm" class="grid md:grid-cols-2 gap-4">
-      <input required name="sku" placeholder="SKU（唯一）" class="border rounded p-2"/>
-      <input required name="name" placeholder="商品名稱" class="border rounded p-2"/>
-      <input name="brand" placeholder="品牌" class="border rounded p-2"/>
-      <input name="category" placeholder="分類" class="border rounded p-2"/>
-      <input name="price" placeholder="售價（NT$，自動轉分）" class="border rounded p-2" type="number" min="0"/>
-      <input name="compare_at_price" placeholder="原價（NT$）" class="border rounded p-2" type="number" min="0"/>
-      <input name="stock" placeholder="庫存數" class="border rounded p-2" type="number" min="0"/>
-      <select name="status" class="border rounded p-2">
-        <option value="active" selected>active</option>
-        <option value="draft">draft</option>
-        <option value="archived">archived</option>
-      </select>
-      <input name="tags" placeholder="標籤（逗號分隔）" class="border rounded p-2 md:col-span-2"/>
-      <input name="slug" placeholder="Slug（選填，不填自動）" class="border rounded p-2 md:col-span-2"/>
-      <textarea name="short_desc" placeholder="短描述" class="border rounded p-2 md:col-span-2"></textarea>
-      <textarea name="description" placeholder="詳細描述（可用 Markdown）" class="border rounded p-2 md:col-span-2"></textarea>
-      <textarea name="specs" placeholder='規格（JSON，例如：{"shape":"round"}）' class="border rounded p-2 md:col-span-2"></textarea>
-      <div class="md:col-span-2 flex gap-2">
-        <button class="px-4 py-2 rounded bg-teal-600 text-white" type="submit">儲存商品</button>
-        <button id="delBtn" class="px-4 py-2 rounded bg-rose-600 text-white" type="button">刪除商品</button>
-      </div>
-    </form>
-  </section>
-
-  <section class="mb-6 rounded-xl bg-white shadow p-4 border">
-    <h2 class="font-semibold mb-3">上傳商品圖片</h2>
-    <form id="imgForm" class="flex flex-col md:flex-row gap-3 items-start">
-      <input required name="sku" placeholder="SKU" class="border rounded p-2"/>
-      <input name="filename" placeholder="檔名（例：main.jpg，留空沿用原檔名）" class="border rounded p-2"/>
-      <input type="file" accept="image/*" name="file" class="border rounded p-2"/>
-      <button class="px-4 py-2 rounded bg-indigo-600 text-white" type="submit">上傳</button>
-    </form>
-    <p class="text-sm text-slate-500 mt-2">R2 路徑：<code>https://image.wedo.pet/{SKU}/{filename}</code></p>
-  </section>
-
-  <section class="rounded-xl bg-white shadow p-4 border">
-    <div class="flex items-center justify-between mb-3">
-      <h2 class="font-semibold">商品列表</h2>
-      <input id="q" placeholder="搜尋（SKU/名稱/品牌/分類）" class="border rounded p-2 w-64"/>
-    </div>
-    <div id="list" class="divide-y"></div>
-    <div class="flex gap-2 mt-3">
-      <button id="prev" class="px-3 py-1 rounded border">上一頁</button>
-      <button id="next" class="px-3 py-1 rounded border">下一頁</button>
-    </div>
-  </section>
-</div>
-
-<script>
-const auth = { headers: { } }; // Basic Auth 由瀏覽器自動帶（因為是受保護頁面）
-let limit = 10, offset = 0;
-
-async function reload() {
-  const q = document.getElementById('q').value || '';
-  const res = await fetch(\`/api/products?limit=\${limit}&offset=\${offset}&search=\${encodeURIComponent(q)}\`, auth);
-  const data = await res.json();
-  const list = document.getElementById('list');
-  list.innerHTML = (data.items || []).map(p => \`
-    <div class="py-2 flex items-start justify-between gap-4">
-      <div>
-        <div class="font-semibold">\${p.name} <span class="text-slate-500">(\${p.sku})</span></div>
-        <div class="text-sm text-slate-500">\${p.brand || ''} · \${p.category || ''} · \$\${(p.price/100).toFixed(0)}</div>
-        <div class="text-xs text-slate-400">status=\${p.status} · stock=\${p.stock}</div>
-      </div>
-      <button class="px-2 py-1 rounded border" onclick='fillForm(\${JSON.stringify(p)})'>載入</button>
-    </div>\`).join('');
-}
-
-function fillForm(p){
-  const f = document.getElementById('prodForm');
-  for (const k of ['sku','name','brand','category','slug','short_desc','description','tags','status']) {
-    if (f[k]) f[k].value = p[k] || '';
-  }
-  if (f.price) f.price.value = p.price ? Math.round(p.price/100) : '';
-  if (f.compare_at_price) f.compare_at_price.value = p.compare_at_price ? Math.round(p.compare_at_price/100) : '';
-  if (f.stock) f.stock.value = p.stock || 0;
-  if (f.specs) f.specs.value = p.specs ? JSON.stringify(p.specs,null,2) : '';
-}
-
-document.getElementById('prev').onclick = ()=>{ offset = Math.max(0, offset - limit); reload(); };
-document.getElementById('next').onclick = ()=>{ offset += limit; reload(); };
-document.getElementById('q').oninput = ()=>{ offset=0; reload(); };
-
-document.getElementById('prodForm').onsubmit = async (e)=>{
-  e.preventDefault();
-  const fd = new FormData(e.target);
-  const sku = fd.get('sku').trim();
-  const body = {};
-  for (const [k,v] of fd.entries()) if (k!=='sku' && v!=='') body[k]=v;
-  if (body.price) body.price = parseInt(body.price,10)*100;
-  if (body.compare_at_price) body.compare_at_price = parseInt(body.compare_at_price,10)*100;
-  if (body.stock) body.stock = parseInt(body.stock,10);
-  if (body.specs) { try { body.specs = JSON.parse(body.specs); } catch{} }
-
-  const exists = await fetch(\`/api/products/\${encodeURIComponent(sku)}\`);
-  if (exists.ok) {
-    await fetch(\`/api/products/\${encodeURIComponent(sku)}\`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  } else {
-    await fetch('/api/products', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sku,...body})});
-  }
-  alert('已儲存'); reload();
-};
-
-document.getElementById('delBtn').onclick = async ()=>{
-  const sku = document.querySelector('#prodForm [name=sku]').value.trim();
-  if (!sku) return alert('請先填 SKU');
-  if (!confirm(\`確定刪除 \${sku}？\`)) return;
-  await fetch(\`/api/products/\${encodeURIComponent(sku)}\`, {method:'DELETE'});
-  alert('已刪除'); reload();
-};
-
-document.getElementById('imgForm').onsubmit = async (e)=>{
-  e.preventDefault();
-  const fd = new FormData(e.target);
-  if (!fd.get('file') || !fd.get('sku')) return alert('請填 SKU 並選擇檔案');
-  const res = await fetch(\`/api/products/\${encodeURIComponent(fd.get('sku'))}/images\`, { method:'POST', body: fd });
-  const data = await res.json();
-  if (data.ok) { alert('上傳完成'); } else { alert('上傳失敗：'+(data.error||'unknown')); }
-};
-reload();
-</script>
-</body></html>`;
-}
-
-// ======== API 實作 ========
-async function listProducts(env, { search, limit = 10, offset = 0 }) {
-  const _limit = parseIntSafe(limit, 10);
-  const _offset = parseIntSafe(offset, 0);
-  let where = [], params = [];
-  if (search) {
-    where.push("(sku LIKE ? OR name LIKE ? OR brand LIKE ? OR category LIKE ?)");
-    const s = `%${search}%`;
-    params.push(s, s, s, s);
-  }
-  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
-  const items = await env.DATABASE.prepare(`
-    SELECT sku,name,slug,brand,category,price,compare_at_price,status,stock,short_desc,description,specs,tags,updated_at
-    FROM products ${whereSql}
-    ORDER BY updated_at DESC
-    LIMIT ? OFFSET ?
-  `).bind(...params, _limit, _offset).all();
-
-  const total = await env.DATABASE.prepare(`
-    SELECT COUNT(*) AS n FROM products ${whereSql}
-  `).bind(...params).first();
-
-  // 轉型 JSON 欄位
-  const rows = (items.results || []).map(r => ({ ...r, specs: r.specs ? JSON.parse(r.specs) : null }));
-  return { ok: true, items: rows, total: total?.n ?? 0, limit: _limit, offset: _offset };
-}
-
-async function getProduct(env, sku) {
-  const row = await env.DATABASE.prepare(`
-    SELECT sku,name,slug,brand,category,price,compare_at_price,status,stock,short_desc,description,specs,tags,updated_at
-    FROM products WHERE sku = ?
-  `).bind(sku).first();
-  if (!row) return null;
-  row.specs = row.specs ? JSON.parse(row.specs) : null;
-  const images = await env.DATABASE.prepare(`
-    SELECT filename, r2_key, alt, sort FROM product_images WHERE sku = ? ORDER BY sort, id
-  `).bind(sku).all();
-  row.images = images.results || [];
-  return row;
-}
-
-async function upsertProduct(env, data) {
-  const sku = (data.sku || "").trim();
-  if (!sku) throw new Error("缺少 sku");
-  const exists = await env.DATABASE.prepare(`SELECT 1 FROM products WHERE sku=?`).bind(sku).first();
-  const payload = {
-    name: data.name || "",
-    slug: data.slug || null,
-    brand: data.brand || null,
-    category: data.category || null,
-    price: parseIntSafe(data.price, 0),
-    compare_at_price: data.compare_at_price != null ? parseIntSafe(data.compare_at_price, null) : null,
-    status: data.status || "active",
-    stock: parseIntSafe(data.stock, 0),
-    short_desc: data.short_desc || null,
-    description: data.description || null,
-    specs: data.specs ? JSON.stringify(data.specs) : null,
-    tags: data.tags || null,
-  };
-  if (exists) {
-    await env.DATABASE.prepare(`
-      UPDATE products
-      SET name=?, slug=?, brand=?, category=?, price=?, compare_at_price=?, status=?, stock=?, short_desc=?, description=?, specs=?, tags=?
-      WHERE sku=?
-    `).bind(payload.name, payload.slug, payload.brand, payload.category, payload.price, payload.compare_at_price, payload.status, payload.stock, payload.short_desc, payload.description, payload.specs, payload.tags, sku).run();
-  } else {
-    await env.DATABASE.prepare(`
-      INSERT INTO products (sku,name,slug,brand,category,price,compare_at_price,status,stock,short_desc,description,specs,tags)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-    `).bind(sku, payload.name, payload.slug, payload.brand, payload.category, payload.price, payload.compare_at_price, payload.status, payload.stock, payload.short_desc, payload.description, payload.specs, payload.tags).run();
-  }
-  return sku;
-}
-
-async function deleteProduct(env, sku) {
-  // 刪除 images 表，R2 是否同時清除交給前端或另設批次（這裡示範同步刪）
-  const imgs = await env.DATABASE.prepare(`SELECT r2_key FROM product_images WHERE sku=?`).bind(sku).all();
-  for (const r of (imgs.results||[])) {
-    await env.R2_BUCKET.delete(r.r2_key);
-  }
-  await env.DATABASE.prepare(`DELETE FROM product_images WHERE sku=?`).bind(sku).run();
-  await env.DATABASE.prepare(`DELETE FROM products WHERE sku=?`).bind(sku).run();
-}
-
-// 上傳圖片：multipart/form-data { file, filename? }
-async function uploadImage(env, sku, formData) {
-  const file = formData.get("file");
-  if (!file || !file.name) throw new Error("缺少檔案");
-  let filename = (formData.get("filename") || file.name).toString();
-  filename = sanitizeFilename(filename);
-  const key = `${sku}/${filename}`;
-
-  // 檔案大小檢查
-  const maxMB = parseInt(env.MAX_IMAGE_MB || "20", 10);
-  if (file.size > maxMB * 1024 * 1024) throw new Error(`檔案過大（>${maxMB}MB）`);
-
-  // 寫入 R2
-  await env.R2_BUCKET.put(key, await file.arrayBuffer(), {
-    httpMetadata: { contentType: file.type || "application/octet-stream" },
-  });
-
-  // 寫入 DB（upsert）
-  await env.DATABASE.prepare(`
-    INSERT INTO product_images (sku,filename,r2_key) VALUES (?,?,?)
-    ON CONFLICT(sku,filename) DO UPDATE SET r2_key=excluded.r2_key
-  `).bind(sku, filename, key).run();
-
-  return { filename, key, url: `https://image.wedo.pet/${encodeURIComponent(sku)}/${encodeURIComponent(filename)}` };
-}
-
-async function deleteImage(env, sku, filename) {
-  filename = sanitizeFilename(filename);
-  const key = `${sku}/${filename}`;
-  await env.R2_BUCKET.delete(key);
-  await env.DATABASE.prepare(`DELETE FROM product_images WHERE sku=? AND filename=?`).bind(sku, filename).run();
-}
-
-// ======== 入口 ========
 export default {
-  async fetch(req, env, ctx) {
-    const url = new URL(req.url);
-    const { pathname, searchParams } = url;
-
-    // CORS preflight
-    if (req.method === "OPTIONS") {
-      return new Response(null, {
-        headers: {
-          "Access-Control-Allow-Origin": ALLOW_ORIGIN,
-          "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization",
-          "Access-Control-Max-Age": "86400",
-        },
-      });
-    }
-
-    // 後台頁（Basic Auth）
-    if (pathname === "/admin") {
-      if (!requireBasicAuth(req, env)) {
-        return new Response("Unauthorized", { status: 401, headers: { "WWW-Authenticate": 'Basic realm="admin"' } });
-      }
-      return new Response(adminHtml(), { headers: { "Content-Type": "text/html; charset=utf-8" } });
-    }
-
-    // 健康檢查
-    if (pathname === "/api/health") return ok({ ok: true, ts: Date.now() });
-
-    // === 商品列表 ===
-    if (pathname === "/api/products" && req.method === "GET") {
-      const search = searchParams.get("search") || "";
-      const limit = searchParams.get("limit") || "10";
-      const offset = searchParams.get("offset") || "0";
-      const data = await listProducts(env, { search, limit, offset });
-      return ok(data);
-    }
-
-    // === 新增商品（後台） ===
-    if (pathname === "/api/products" && req.method === "POST") {
-      if (!requireBasicAuth(req, env)) return bad("Unauthorized", 401);
-      const body = await req.json().catch(()=> ({}));
-      try {
-        const sku = await upsertProduct(env, body);
-        const item = await getProduct(env, sku);
-        return ok({ ok: true, item });
-      } catch (e) { return bad(e.message || "invalid", 400); }
-    }
-
-    // /api/products/:sku
-    const productMatch = pathname.match(/^\/api\/products\/([^/]+)$/);
-    if (productMatch) {
-      const sku = decodeURIComponent(productMatch[1]);
-      if (req.method === "GET") {
-        const item = await getProduct(env, sku);
-        return item ? ok(item) : notFound();
-      }
-      if (req.method === "PUT") {
-        if (!requireBasicAuth(req, env)) return bad("Unauthorized", 401);
-        const body = await req.json().catch(()=> ({}));
-        try {
-          await upsertProduct(env, { ...body, sku });
-          const item = await getProduct(env, sku);
-          return ok({ ok: true, item });
-        } catch (e) { return bad(e.message || "invalid", 400); }
-      }
-      if (req.method === "DELETE") {
-        if (!requireBasicAuth(req, env)) return bad("Unauthorized", 401);
-        await deleteProduct(env, sku);
-        return ok({ ok: true });
-      }
-      return methodNotAllowed();
-    }
-
-    // /api/products/:sku/images（POST 上傳）
-    const imgUploadMatch = pathname.match(/^\/api\/products\/([^/]+)\/images$/);
-    if (imgUploadMatch) {
-      const sku = decodeURIComponent(imgUploadMatch[1]);
-      if (req.method !== "POST") return methodNotAllowed();
-      if (!requireBasicAuth(req, env)) return bad("Unauthorized", 401);
-      const form = await req.formData();
-      try {
-        const out = await uploadImage(env, sku, form);
-        return ok({ ok: true, ...out });
-      } catch (e) { return bad(e.message || "upload failed", 400); }
-    }
-
-    // /api/products/:sku/images/:filename（DELETE）
-    const imgDelMatch = pathname.match(/^\/api\/products\/([^/]+)\/images\/([^/]+)$/);
-    if (imgDelMatch) {
-      const sku = decodeURIComponent(imgDelMatch[1]);
-      const filename = decodeURIComponent(imgDelMatch[2]);
-      if (req.method !== "DELETE") return methodNotAllowed();
-      if (!requireBasicAuth(req, env)) return bad("Unauthorized", 401);
-      await deleteImage(env, sku, filename);
-      return ok({ ok: true });
-    }
-
-    return notFound();
-  },
+  fetch: (req, env, ctx) => router(req, env, ctx),
 };
+
+// -----------------------------
+// 工具：回應包裝 / CORS / Auth
+// -----------------------------
+
+const json = (data, init = {}) =>
+  new Response(JSON.stringify(data, null, 2), {
+    status: init.status || 200,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      ...init.headers,
+    },
+  });
+
+const text = (data, init = {}) =>
+  new Response(data, {
+    status: init.status || 200,
+    headers: { "content-type": "text/plain; charset=utf-8", ...init.headers },
+  });
+
+const notFound = () => json({ ok: false, error: "Not Found" }, { status: 404 });
+
+const getOrigin = (req) => {
+  try {
+    return new URL(req.url).origin;
+  } catch {
+    return "*";
+  }
+};
+
+const withCORS = (req, res, env) => {
+  const reqOrigin = req.headers.get("Origin");
+  const allowList = (env.ALLOWED_ORIGINS || "*")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const allowOrigin =
+    allowList.includes("*") || !reqOrigin || allowList.includes(reqOrigin)
+      ? reqOrigin || "*"
+      : allowList[0] || "*";
+
+  const headers = {
+    "Access-Control-Allow-Origin": allowOrigin,
+    "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+    "Access-Control-Allow-Headers":
+      "Content-Type, Authorization, X-Requested-With",
+    "Access-Control-Allow-Credentials": "true",
+    Vary: "Origin",
+  };
+
+  const resHeaders = new Headers(res.headers);
+  for (const [k, v] of Object.entries(headers)) resHeaders.set(k, v);
+  return new Response(res.body, { ...res, headers: resHeaders, status: res.status });
+};
+
+const handlePreflight = (req, env) => {
+  if (req.method !== "OPTIONS") return null;
+  // 快速回應 CORS 預檢
+  return withCORS(
+    req,
+    new Response(null, {
+      status: 204,
+      headers: { "content-length": "0" },
+    }),
+    env
+  );
+};
+
+const basicAuthOk = (req, env) => {
+  const h = req.headers.get("Authorization") || "";
+  if (!h.startsWith("Basic ")) return false;
+  try {
+    const [user, pass] = atob(h.slice(6)).split(":");
+    return user === env.USERNAME && pass === env.PASSWORD;
+  } catch {
+    return false;
+  }
+};
+
+const requireAuth = (req, env) => {
+  if (basicAuthOk(req, env)) return null;
+  return new Response("Unauthorized", {
+    status: 401,
+    headers: { "WWW-Authenticate": 'Basic realm="Restricted"' },
+  });
+};
+
+const readJSON = async (req) => {
+  try {
+    const body = await req.text();
+    return body ? JSON.parse(body) : {};
+  } catch {
+    throw new Error("Invalid JSON");
+  }
+};
+
+// -----------------------------
+// Router
+// -----------------------------
+
+async function router(req, env, ctx) {
+  const preflight = handlePreflight(req, env);
+  if (preflight) return preflight;
+
+  const url = new URL(req.url);
+  const path = url.pathname;
+
+  // Public image gateway: /{sku}/{filename}
+  // e.g., https://image.wedo.pet/ABC123/main.jpg
+  const imageMatch = path.match(/^\/([^/]+)\/([^/]+)$/);
+  if (imageMatch && req.method === "GET") {
+    const [, sku, filename] = imageMatch;
+    return withCORS(req, await handleR2ImageGet(sku, filename, env), env);
+  }
+
+  // Home
+  if (path === "/" && req.method === "GET") {
+    return withCORS(
+      req,
+      json({
+        ok: true,
+        name: "Pet Republic API",
+        routes: {
+          public: [
+            "GET   /                          -> this help",
+            "GET   /{sku}/{filename}          -> public image (R2)",
+            "GET   /api/products              -> list products (q, brand, category, status, page, size)",
+            "GET   /api/products/:sku         -> get product by sku",
+            "GET   /api/products/:sku/images  -> list images of product",
+          ],
+          protected_basic_auth: [
+            "GET   /admin                      -> minimal admin home",
+            "POST  /api/products               -> create",
+            "PUT   /api/products/:sku          -> update",
+            "DELETE /api/products/:sku         -> delete",
+            "POST  /api/products/:sku/images   -> add image record",
+            "DELETE /api/products/:sku/images/:filename -> delete image record",
+            "POST  /api/upload/:sku            -> (todo) upload image to R2 (binary)",
+            "POST  /sync-airtable              -> one-shot import (if Airtable configured)",
+          ],
+        },
+      }),
+      env
+    );
+  }
+
+  // Admin (protected)
+  if (path === "/admin") {
+    const auth = requireAuth(req, env);
+    if (auth) return auth;
+    const origin = getOrigin(req);
+    const html = `<!doctype html><meta charset="utf-8"/>
+      <title>Pet Republic Admin</title>
+      <style>body{font-family:ui-sans-serif,system-ui;padding:32px;max-width:960px;margin:auto;}</style>
+      <h1>🐾 寵兒共和國：商品管理</h1>
+      <p>這是最小版管理入口（Basic Auth 保護）。</p>
+      <ul>
+        <li><code>GET ${origin}/api/products</code> 檢視清單</li>
+        <li><code>POST ${origin}/sync-airtable</code> Airtable 一次性匯入（若已設定）</li>
+      </ul>`;
+    return withCORS(
+      req,
+      new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } }),
+      env
+    );
+  }
+
+  // API: Products
+  if (path === "/api/products" && req.method === "GET") {
+    return withCORS(req, await listProducts(url, env), env);
+  }
+  if (path === "/api/products" && req.method === "POST") {
+    const auth = requireAuth(req, env);
+    if (auth) return auth;
+    return withCORS(req, await createProduct(req, env), env);
+  }
+
+  const productSkuMatch = path.match(/^\/api\/products\/([^/]+)$/);
+  if (productSkuMatch) {
+    const sku = decodeURIComponent(productSkuMatch[1]);
+    if (req.method === "GET") {
+      return withCORS(req, await getProduct(sku, env), env);
+    }
+    if (req.method === "PUT") {
+      const auth = requireAuth(req, env);
+      if (auth) return auth;
+      return withCORS(req, await updateProduct(req, sku, env), env);
+    }
+    if (req.method === "DELETE") {
+      const auth = requireAuth(req, env);
+      if (auth) return auth;
+      return withCORS(req, await deleteProduct(sku, env), env);
+    }
+  }
+
+  // API: Product Images
+  const productImagesListMatch = path.match(/^\/api\/products\/([^/]+)\/images$/);
+  if (productImagesListMatch) {
+    const sku = decodeURIComponent(productImagesListMatch[1]);
+    if (req.method === "GET") {
+      return withCORS(req, await listImages(sku, env), env);
+    }
+    if (req.method === "POST") {
+      const auth = requireAuth(req, env);
+      if (auth) return auth;
+      return withCORS(req, await addImageRecord(req, sku, env), env);
+    }
+  }
+
+  const productImageDeleteMatch = path.match(
+    /^\/api\/products\/([^/]+)\/images\/([^/]+)$/
+  );
+  if (productImageDeleteMatch && req.method === "DELETE") {
+    const auth = requireAuth(req, env);
+    if (auth) return auth;
+    const sku = decodeURIComponent(productImageDeleteMatch[1]);
+    const filename = decodeURIComponent(productImageDeleteMatch[2]);
+    return withCORS(req, await deleteImageRecord(sku, filename, env), env);
+  }
+
+  // （可選）API: Upload Binary to R2（預留，若你要走 Worker 直傳）
+  if (path.startsWith("/api/upload/") && req.method === "POST") {
+    const auth = requireAuth(req, env);
+    if (auth) return auth;
+    const sku = decodeURIComponent(path.split("/").pop());
+    return withCORS(req, await uploadToR2(req, sku, env), env);
+  }
+
+  // （可選）Airtable 一次性匯入（若你還需從 Airtable 轉移最後一次）
+  if (path === "/sync-airtable" && req.method === "POST") {
+    const auth = requireAuth(req, env);
+    if (auth) return auth;
+    return withCORS(req, await syncAirtable(env), env);
+  }
+
+  return withCORS(req, notFound(), env);
+}
+
+// -----------------------------
+// D1: Products
+// -----------------------------
+
+async function listProducts(url, env) {
+  const q = url.searchParams.get("q")?.trim() || "";
+  const brand = url.searchParams.get("brand")?.trim() || "";
+  const category = url.searchParams.get("category")?.trim() || "";
+  const status = url.searchParams.get("status")?.trim() || "";
+  const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10));
+  const size = Math.min(100, Math.max(1, parseInt(url.searchParams.get("size") || "20", 10)));
+  const offset = (page - 1) * size;
+
+  const cond = [];
+  const params = {};
+
+  if (q) {
+    cond.push("(sku LIKE $q OR name LIKE $q)");
+    params["q"] = `%${q}%`;
+  }
+  if (brand) {
+    cond.push("brand = $brand");
+    params["brand"] = brand;
+  }
+  if (category) {
+    cond.push("category = $category");
+    params["category"] = category;
+  }
+  if (status) {
+    cond.push("status = $status");
+    params["status"] = status;
+  }
+
+  const where = cond.length ? `WHERE ${cond.join(" AND ")}` : "";
+  const sql = `
+    SELECT id, sku, name, slug, brand, category, price, compare_at_price, status, stock, short_desc, created_at, updated_at
+    FROM products
+    ${where}
+    ORDER BY created_at DESC
+    LIMIT $limit OFFSET $offset
+  `;
+  params["limit"] = size;
+  params["offset"] = offset;
+
+  const countSql = `SELECT COUNT(*) AS total FROM products ${where}`;
+  const { results } = await env.DATABASE.prepare(sql).bind(...bindNamed(params)).all();
+  const countRes = await env.DATABASE.prepare(countSql).bind(...bindNamed(params)).first();
+  const total = Number(countRes?.total || 0);
+
+  return json({
+    ok: true,
+    page,
+    size,
+    total,
+    items: results || [],
+  });
+}
+
+async function getProduct(sku, env) {
+  const row = await env.DATABASE
+    .prepare(
+      `SELECT id, sku, name, slug, brand, category, price, compare_at_price, status, stock,
+              short_desc, description, specs, tags, created_at, updated_at
+       FROM products WHERE sku = ?`
+    )
+    .bind(sku)
+    .first();
+
+  if (!row) return json({ ok: false, error: "Product not found" }, { status: 404 });
+  return json({ ok: true, item: row });
+}
+
+async function createProduct(req, env) {
+  let payload;
+  try {
+    payload = await readJSON(req);
+  } catch {
+    return json({ ok: false, error: "Invalid JSON" }, { status: 400 });
+  }
+
+  // 必填：sku, name；其他選填
+  const required = ["sku", "name"];
+  for (const k of required) {
+    if (!payload[k]) return json({ ok: false, error: `Missing field: ${k}` }, { status: 400 });
+  }
+
+  const {
+    sku,
+    name,
+    slug = null,
+    brand = null,
+    category = null,
+    price = 0,
+    compare_at_price = null,
+    status = "active",
+    stock = 0,
+    short_desc = null,
+    description = null,
+    specs = null,
+    tags = null,
+  } = payload;
+
+  try {
+    await env.DATABASE
+      .prepare(
+        `INSERT INTO products
+         (sku, name, slug, brand, category, price, compare_at_price, status, stock, short_desc, description, specs, tags)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        sku,
+        name,
+        slug,
+        brand,
+        category,
+        toInt(price),
+        compare_at_price != null ? toInt(compare_at_price) : null,
+        status,
+        toInt(stock),
+        short_desc,
+        description,
+        specs ? JSON.stringify(specs) : null,
+        normalizeTags(tags)
+      )
+      .run();
+
+    return json({ ok: true, sku });
+  } catch (err) {
+    return json({ ok: false, error: String(err.message || err) }, { status: 400 });
+  }
+}
+
+async function updateProduct(req, sku, env) {
+  let payload;
+  try {
+    payload = await readJSON(req);
+  } catch {
+    return json({ ok: false, error: "Invalid JSON" }, { status: 400 });
+  }
+
+  // 動態組 UPDATE
+  const fields = [];
+  const vals = [];
+  const mapping = {
+    name: "name",
+    slug: "slug",
+    brand: "brand",
+    category: "category",
+    price: "price",
+    compare_at_price: "compare_at_price",
+    status: "status",
+    stock: "stock",
+    short_desc: "short_desc",
+    description: "description",
+    specs: "specs",
+    tags: "tags",
+  };
+
+  for (const [k, col] of Object.entries(mapping)) {
+    if (k in payload) {
+      let v = payload[k];
+      if (k === "price" || k === "compare_at_price" || k === "stock") v = toInt(v);
+      if (k === "specs" && v != null) v = JSON.stringify(v);
+      if (k === "tags") v = normalizeTags(v);
+      fields.push(`${col} = ?`);
+      vals.push(v);
+    }
+  }
+
+  if (!fields.length) {
+    return json({ ok: false, error: "Nothing to update" }, { status: 400 });
+  }
+
+  try {
+    await env.DATABASE
+      .prepare(`UPDATE products SET ${fields.join(", ")} WHERE sku = ?`)
+      .bind(...vals, sku)
+      .run();
+
+    return json({ ok: true, sku });
+  } catch (err) {
+    return json({ ok: false, error: String(err.message || err) }, { status: 400 });
+  }
+}
+
+async function deleteProduct(sku, env) {
+  const tx = env.DATABASE;
+  try {
+    await tx.prepare(`DELETE FROM product_images WHERE sku = ?`).bind(sku).run();
+    await tx.prepare(`DELETE FROM products WHERE sku = ?`).bind(sku).run();
+    return json({ ok: true, sku });
+  } catch (err) {
+    return json({ ok: false, error: String(err.message || err) }, { status: 400 });
+  }
+}
+
+// -----------------------------
+// D1: Product Images
+// -----------------------------
+
+async function listImages(sku, env) {
+  const { results } = await env.DATABASE
+    .prepare(
+      `SELECT id, sku, filename, r2_key, alt, sort, created_at
+       FROM product_images
+       WHERE sku = ?
+       ORDER BY sort ASC, id ASC`
+    )
+    .bind(sku)
+    .all();
+
+  return json({ ok: true, items: results || [] });
+}
+
+async function addImageRecord(req, sku, env) {
+  let payload;
+  try {
+    payload = await readJSON(req);
+  } catch {
+    return json({ ok: false, error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const filename = payload.filename?.trim();
+  if (!filename) return json({ ok: false, error: "Missing filename" }, { status: 400 });
+
+  const r2_key = payload.r2_key || `${sku}/${filename}`;
+  const alt = payload.alt || null;
+  const sort = toInt(payload.sort || 0);
+
+  try {
+    await env.DATABASE
+      .prepare(
+        `INSERT INTO product_images (sku, filename, r2_key, alt, sort)
+         VALUES (?, ?, ?, ?, ?)`
+      )
+      .bind(sku, filename, r2_key, alt, sort)
+      .run();
+
+    return json({ ok: true, sku, filename, r2_key });
+  } catch (err) {
+    return json({ ok: false, error: String(err.message || err) }, { status: 400 });
+  }
+}
+
+async function deleteImageRecord(sku, filename, env) {
+  try {
+    await env.DATABASE
+      .prepare(`DELETE FROM product_images WHERE sku = ? AND filename = ?`)
+      .bind(sku, filename)
+      .run();
+
+    // 注意：這裡只刪 D1 紀錄，不自動刪 R2 物件，避免誤刪
+    return json({ ok: true, sku, filename });
+  } catch (err) {
+    return json({ ok: false, error: String(err.message || err) }, { status: 400 });
+  }
+}
+
+// -----------------------------
+// R2: Public Image Read
+// -----------------------------
+
+async function handleR2ImageGet(sku, filename, env) {
+  const key = `${sku}/${filename}`;
+
+  const obj = await env.R2_BUCKET.get(key);
+  if (!obj) return notFound();
+
+  // 嘗試用副檔名判斷 content-type
+  const type = guessMime(filename) || obj.httpMetadata?.contentType || "application/octet-stream";
+
+  // Cache 控制：公網（CDN & 瀏覽器）
+  const headers = new Headers();
+  headers.set("content-type", type);
+  headers.set("cache-control", "public, max-age=31536000, immutable"); // 1y
+  // ETag / Last-Modified（交由 R2）
+  if (obj.httpEtag) headers.set("etag", obj.httpEtag);
+  if (obj.uploaded) headers.set("last-modified", new Date(obj.uploaded).toUTCString());
+
+  return new Response(obj.body, { status: 200, headers });
+}
+
+// （可選）R2 上傳（直傳二進位）
+// 期待 multipart/form-data; field: file
+async function uploadToR2(req, sku, env) {
+  try {
+    const contentType = req.headers.get("content-type") || "";
+    if (!contentType.startsWith("multipart/form-data"))
+      return json({ ok: false, error: "Expect multipart/form-data" }, { status: 400 });
+
+    const form = await req.formData();
+    const file = form.get("file");
+    if (!file || typeof file === "string")
+      return json({ ok: false, error: "Missing file" }, { status: 400 });
+
+    const filename = form.get("filename") || file.name || "upload.bin";
+    const key = `${sku}/${filename}`;
+
+    const maxMB = parseInt(env.MAX_IMAGE_MB || "20", 10);
+    if (file.size > maxMB * 1024 * 1024) {
+      return json({ ok: false, error: `File too large (>${maxMB}MB)` }, { status: 413 });
+    }
+
+    await env.R2_BUCKET.put(key, file.stream(), {
+      httpMetadata: { contentType: file.type || guessMime(filename) || "application/octet-stream" },
+    });
+
+    return json({ ok: true, key, url: `/${key}` });
+  } catch (err) {
+    return json({ ok: false, error: String(err.message || err) }, { status: 400 });
+  }
+}
+
+// -----------------------------
+// Airtable Sync（可選）
+// -----------------------------
+
+async function syncAirtable(env) {
+  const token = env.AIRTABLE_API_TOKEN;
+  const base = env.AIRTABLE_BASE_ID;
+  const table = env.AIRTABLE_TABLE_NAME;
+
+  if (!token || !base || !table) {
+    return json(
+      {
+        ok: false,
+        error:
+          "Airtable config missing. Set AIRTABLE_API_TOKEN, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME to enable.",
+      },
+      { status: 501 }
+    );
+  }
+
+  // 這裡保留為將來需要時的匯入流程（避免此刻阻塞）
+  // 你未來可實作：分頁抓取 Airtable -> 轉換 -> 寫入 products & product_images
+  return json({ ok: true, message: "Sync handler placeholder. Configure and implement if needed." });
+}
+
+// -----------------------------
+// Helpers
+// -----------------------------
+
+function toInt(n) {
+  const v = Number(n);
+  return Number.isFinite(v) ? Math.trunc(v) : 0;
+}
+
+function normalizeTags(tags) {
+  if (tags == null) return null;
+  if (Array.isArray(tags)) return tags.join(",");
+  if (typeof tags === "object") return JSON.stringify(tags);
+  return String(tags);
+}
+
+function bindNamed(named) {
+  // Cloudflare D1 目前只支援位置參數，這裡將具名物件轉為陣列
+  const order = Object.keys(named);
+  return order.map((k) => named[k]);
+}
+
+function guessMime(filename = "") {
+  const ext = filename.split(".").pop()?.toLowerCase();
+  switch (ext) {
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "png":
+      return "image/png";
+    case "webp":
+      return "image/webp";
+    case "gif":
+      return "image/gif";
+    case "svg":
+      return "image/svg+xml";
+    case "avif":
+      return "image/avif";
+    case "heic":
+      return "image/heic";
+    case "bmp":
+      return "image/bmp";
+    default:
+      return null;
+  }
+}
