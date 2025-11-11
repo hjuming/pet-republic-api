@@ -1,4 +1,52 @@
+/**
+ * 真正執行 Airtable 同步的核心邏輯
+ * (注意：這裡的實作是下一個步驟，目前我們先專注於呼叫它)
+ */
+async function syncAirtable(env) {
+  console.log(`[${new Date().toISOString()}] 正在執行 syncAirtable 函式...`);
+  
+  // ===================================================
+  // 
+  // 
+  // 
+  // 
+  //   
+  // 
+  // 
+  //   
+  // 
+  // 
+  // 
+  // ===================================================
+
+  // 回傳一個簡單的日誌訊息
+  const result = {
+    ok: true,
+    message: "已觸發同步 (此為示範邏輯，尚未實作真實抓取)",
+    timestamp: new Date().toISOString(),
+  };
+  
+  console.log(JSON.stringify(result));
+  return result;
+}
+
+
+// --- Worker 處理常式 ---
+
 export default {
+  /**
+   * ✅ 
+   * * */
+  async scheduled(controller, env, ctx) {
+    console.log(`[cron] 偵測到排程觸發: ${controller.cron}`);
+    // 
+    // 
+    ctx.waitUntil(syncAirtable(env));
+  },
+
+  /**
+   * 處理 HTTP 請求 (fetch)
+   */
   async fetch(request, env, ctx) {
     try {
       const url = new URL(request.url);
@@ -17,7 +65,7 @@ export default {
           headers: {
             "access-control-allow-origin": "*",
             "access-control-allow-headers": "authorization,content-type",
-            "access-control-allow-methods": "GET,POST,OPTIONS",
+            "access-control-allow-methods", "GET,POST,OPTIONS",
           },
         });
       }
@@ -85,14 +133,25 @@ export default {
 </section>
 <script>
   document.getElementById('btn').onclick = async () => {
-    const res = await fetch('/sync-airtable', {method:'POST'});
-    document.getElementById('out').textContent = await res.text();
+    const btn = document.getElementById('btn');
+    const out = document.getElementById('out');
+    btn.disabled = true;
+    out.textContent = '正在請求同步...';
+    try {
+      const res = await fetch('/sync-airtable', {method:'POST'});
+      const data = await res.json();
+      out.textContent = JSON.stringify(data, null, 2);
+    } catch (e) {
+      out.textContent = '錯誤: ' + e.message;
+    } finally {
+      btn.disabled = false;
+    }
   }
 </script>`;
         return text(html, 200, { "content-type": "text/html; charset=utf-8" });
       }
 
-      // 手動同步（示範回覆）
+      // ✅ 
       if (request.method === "POST" && path === "/sync-airtable") {
         if (!requireBasicAuth()) {
           return withCors(new Response("Unauthorized", {
@@ -100,10 +159,11 @@ export default {
             headers: { "WWW-Authenticate": 'Basic realm="pet-republic-admin"' },
           }));
         }
-        return json({
-          ok: true,
-          message: "已接收同步請求。請留意 D1 儀表板查詢數與 logs（此示範回覆成功，不執行真實抓取）。",
-        });
+        
+        // 
+        // 
+        const result = await syncAirtable(env);
+        return json(result);
       }
 
       // 產品列表
