@@ -1,19 +1,70 @@
+# ===============================
+# 🐾 寵兒共和國 API（Pet Republic API）
+# Cloudflare Workers 部署設定
+# ===============================
+
 name = "pet-republic-api"
 main = "src/index.js"
 compatibility_date = "2024-10-01"
 workers_dev = true
 
+# ===============================
+# 🌐 路由設定
+# ===============================
+# 若使用 Cloudflare 儀表板手動綁定自訂網域，可保留註解；
+# 若想改由 toml 控制，可解除註解並確認 pattern。
+# routes = [
+#   { pattern = "image.wedo.pet/*", zone_name = "wedo.pet" }
+# ]
+
+# ===============================
+# ⏰ Cron 定時觸發（每 10 分鐘）
+# ===============================
 [triggers]
 crons = ["*/10 * * * *"]
 
+# ===============================
+# 🗄️ D1 資料庫綁定
+# ===============================
 [[d1_databases]]
-binding = "DATABASE"
-database_name = "image-db"
-database_id = "243fe99c-70d9-4d4d-89e7-d3dd3b58dadf"   # ✅ 這行填上
+binding = "DATABASE"                        # 在程式內用 env.DATABASE 呼叫
+database_name = "image-db"                  # D1 資料庫名稱
+database_id = "243fe99c-70d9-4d4d-89e7-d3dd3b58dadf"  # ✅ 你的 D1 ID
 
+# ===============================
+# ☁️ R2 儲存桶綁定
+# ===============================
 [[r2_buckets]]
-binding = "R2_BUCKET"
-bucket_name = "my-images-bucket"
+binding = "R2_BUCKET"                       # 在程式內用 env.R2_BUCKET 呼叫
+bucket_name = "my-images-bucket"            # R2 儲存桶名稱
 
+# ===============================
+# ⚙️ 非機密環境變數（安全可公開）
+# ===============================
 [vars]
+# 最大允許圖片大小 (MB)
 MAX_IMAGE_MB = "20"
+
+# CORS 允許來源（用於圖片與 API）
+CORS_ALLOW_ORIGIN = "https://image.wedo.pet"
+
+# ===============================
+# 🔒 機密值（由 GitHub Actions 自動設定）
+# ===============================
+# 以下變數在 wrangler.toml 不需填值，會由 workflow 自動 wrangler secret put：
+#   AIRTABLE_API_TOKEN
+#   AIRTABLE_BASE_ID
+#   AIRTABLE_TABLE_NAME
+#   USERNAME
+#   PASSWORD
+#   DOMAIN
+
+# ===============================
+# 🚀 部署與開發注意事項
+# ===============================
+# - 開發測試可用 `wrangler dev` 在本地啟動模擬。
+# - 正式部署請使用 GitHub Actions（deploy.yml）。
+# - 需確保 CLOUDFLARE_API_TOKEN 具備以下權限：
+#     * Workers Scripts:Edit, Workers KV Storage:Edit,
+#       Workers R2 Storage:Edit, D1:Edit
+# - 若更換帳號或 R2/D1 名稱，務必同步更新此檔案。
