@@ -9,12 +9,9 @@ jobs:
   deploy:
     runs-on: ubuntu-24.04
     env:
-      # 提供給 wrangler 的 Token（請在 Secrets 設定）
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      # 與 wrangler whoami 顯示相同帳號 ID
       CLOUDFLARE_ACCOUNT_ID: 7f62a5bc86f62578367c93b8a1e0f131
 
-      # （選填）要寫入 Worker Secrets 的業務金鑰
       USERNAME: ${{ secrets.PET_API_USERNAME }}
       PASSWORD: ${{ secrets.PET_API_PASSWORD }}
       AIRTABLE_API_TOKEN: ${{ secrets.AIRTABLE_API_TOKEN }}
@@ -67,8 +64,9 @@ jobs:
       - name: Ping D1 by name (debug)
         run: npx wrangler d1 execute image-db --command "SELECT 'ok' AS ping;" --remote --env production --config wrangler.toml
 
-      - name: Apply D1 migrations (by database_name)
-        run: npx wrangler d1 migrations apply image-db --remote --env production --config wrangler.toml
+      # ✅ 重點：migrations 用「binding」而不是 DB 名稱
+      - name: Apply D1 migrations (by binding)
+        run: npx wrangler d1 migrations apply DATABASE --remote --env production --config wrangler.toml
 
       - name: Deploy Worker
         run: npx wrangler deploy --env production --config wrangler.toml
