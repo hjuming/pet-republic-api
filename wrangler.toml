@@ -3,8 +3,6 @@ name = "pet-republic-api"
 main = "src/index.js"
 compatibility_date = "2024-10-01"
 workers_dev = true
-
-# 明寫帳號 ID（與 whoami 顯示一致）
 account_id = "你的 Cloudflare Account ID"
 
 # ========= Vars =========
@@ -18,9 +16,9 @@ bucket_name = "my-images-bucket"
 
 # ========= D1（預設環境）=========
 [[d1_databases]]
-binding = "DATABASE"          # ← 這個是給 Worker/CI 使用的「binding 名」
-database_name = "image-db"    # ← 你的 D1 實際名稱
-migrations_dir = "migrations" # ← CI 會依此位置套用
+binding = "DATABASE"            # <— 之後 CLI 要用這個名稱
+database_name = "image-db"      # <— D1 的顯示名稱（不拿來跑 CLI）
+migrations_dir = "migrations"
 
 # ========= Cron（選填）=========
 [triggers]
