@@ -1,28 +1,19 @@
 name = "pet-republic-api"
 main = "src/index.js"
-compatibility_date = "2024-10-01"   # 建議升到較新日期，避免舊相容模式
-
+compatibility_date = "2024-10-01"
 workers_dev = true
 
-# 每 10 分鐘跑一次排程
 [triggers]
 crons = ["*/10 * * * *"]
 
-# 綁定 D1（請把 database_id 填上）
 [[d1_databases]]
-binding = "DATABASE"            # 程式裡用 env.DATABASE
+binding = "DATABASE"
 database_name = "image-db"
-database_id = "<你的 D1 database_id>"
+database_id = "243fe99c-70d9-4d4d-89e7-d3dd3b58dadf"   # ✅ 這行填上
 
-# 綁定 R2
 [[r2_buckets]]
-binding = "R2_BUCKET"           # 程式裡用 env.R2_BUCKET
+binding = "R2_BUCKET"
 bucket_name = "my-images-bucket"
 
-# 非敏感常數才放這裡（可選）
 [vars]
 MAX_IMAGE_MB = "20"
-
-# 若有多環境，再加 env.production / env.staging ...（不要放 secrets）
-# [env.production]
-# [env.staging]
