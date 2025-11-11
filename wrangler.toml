@@ -1,39 +1,23 @@
-name: Deploy Product API Worker
+name = "pet-republic-api"
+main = "src/index.js"
+compatibility_date = "2023-12-01"
 
-on:
-  push:
-    branches:
-      - main 
+[triggers]
+crons = ["*/10 * * * *"]
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    name: Deploy
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20' 
-      
-      - name: Install dependencies
-        run: npm install
+[[d1_databases]]
+binding = "DATABASE"
+database_name = "image-db"
 
-      # 部署 Worker
-      - name: Deploy Worker
-        run: npm run deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          
-      # 設定 Worker 執行時所需的 Secret
-      - name: Set Worker Secrets
-        run: |
-          echo ${{ secrets.AIRTABLE_API_TOKEN }} | npx wrangler secret put AIRTABLE_API_TOKEN
-          echo ${{ secrets.USERNAME }} | npx wrangler secret put USERNAME
-          echo ${{ secrets.PASSWORD }} | npx wrangler secret put PASSWORD
-          echo ${{ secrets.DOMAIN }} | npx wrangler secret put DOMAIN
-          echo ${{ secrets.AIRTABLE_BASE_ID }} | npx wrangler secret put AIRTABLE_BASE_ID         # <-- [新] 新增這一行
-          echo ${{ secrets.AIRTABLE_TABLE_NAME }} | npx wrangler secret put AIRTABLE_TABLE_NAME # <-- [新] 新增這一行
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "my-images-bucket"
+
+# 綁定 Secret (總共 6 個)
+[secrets]
+"AIRTABLE_API_TOKEN"
+"USERNAME"
+"PASSWORD"
+"DOMAIN"
+"AIRTABLE_BASE_ID"      # <-- [新] 新增這一行
+"AIRTABLE_TABLE_NAME" # <-- [新] 新增這一行
