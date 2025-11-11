@@ -5,7 +5,7 @@ compatibility_date = "2024-10-01"
 workers_dev = true
 
 # 明寫帳號 ID（與 whoami 顯示一致）
-account_id = "7f62a5bc86f62578367c93b8a1e0f131"
+account_id = "你的 Cloudflare Account ID"
 
 # ========= Vars =========
 [vars]
@@ -18,10 +18,9 @@ bucket_name = "my-images-bucket"
 
 # ========= D1（預設環境）=========
 [[d1_databases]]
-binding = "DATABASE"
-database_name = "image-db"
-migrations_dir = "migrations"
-# ⚠️ 不要填 database_id，讓 wrangler 以名稱解析
+binding = "DATABASE"          # ← 這個是給 Worker/CI 使用的「binding 名」
+database_name = "image-db"    # ← 你的 D1 實際名稱
+migrations_dir = "migrations" # ← CI 會依此位置套用
 
 # ========= Cron（選填）=========
 [triggers]
@@ -29,8 +28,7 @@ crons = ["*/30 * * * *"]
 
 # ========= production 環境 =========
 [env.production]
-# 與上方一致，避免 CI 情境解析落空
-account_id = "7f62a5bc86f62578367c93b8a1e0f131"
+account_id = "你的 Cloudflare Account ID"
 
 [env.production.vars]
 MAX_IMAGE_MB = "20"
@@ -43,4 +41,3 @@ bucket_name = "my-images-bucket"
 binding = "DATABASE"
 database_name = "image-db"
 migrations_dir = "migrations"
-# ⚠️ 同樣不要填 database_id
