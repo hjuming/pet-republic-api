@@ -1,113 +1,38 @@
 // src/index.js
-// Pet Republic API - Cloudflare Worker
-// Bindings (Wrangler):
-//  - D1:        binding=DATABASE
-//  - R2:        binding=R2_BUCKET
-//  - Vars:      MAX_IMAGE_MB (string, optional)
-//  - Secrets:   USERNAME, PASSWORD, AIRTABLE_API_TOKEN, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME
+// Pet Republic API (Cloudflare Workers + D1 + R2)
+// - GET  /                         -> catalog html
+// - GET  /admin                    -> admin html (Basic Auth)
+// - GET  /{sku}/{filename}         -> public image from R2
+// - GET  /api/products             -> list (q, brand, category, status, page, size)
+// - GET  /api/products/:sku        -> single
+// - GET  /api/products/:sku/images -> images by sku
+// - POST /api/products             -> create   (Basic Auth)
+// - PUT  /api/products/:sku        -> update   (Basic Auth)
+// - DELETE /api/products/:sku      -> delete   (Basic Auth)
+// - POST /api/products/:sku/images -> add image record  (Basic Auth)
+// - DELETE /api/products/:sku/images/:filename -> delete image record (Basic Auth)
+// - POST /sync-airtable            -> manual one-shot import trigger (Basic Auth, placeholder)
 
-const TEXT_HTML = { 'content-type': 'text/html; charset=utf-8' };
-const JSON_HDR  = { 'content-type': 'application/json; charset=utf-8' };
+const JSON_OK = (obj = {}, init = 200) =>
+  new Response(JSON.stringify(obj, null, 2), {
+    status: init,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
 
-// ---- tiny utils ----
-const ok = (data = {}) => new Response(JSON.stringify({ ok: true, ...data }, null, 2), { headers: JSON_HDR });
-const err = (msg = 'Error', code = 400) => new Response(JSON.stringify({ ok: false, error: msg }, null, 2), { status: code, headers: JSON_HDR });
-const notFound = () => new Response('Not Found', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+const JSON_ERR = (msg = "Error", init = 400) =>
+  JSON_OK({ ok: false, error: msg }, init);
 
-const parseJSON = async (req) => {
-  try { return await req.json(); } catch { return null; }
-};
-const parseBasicAuth = (req) => {
-  const h = req.headers.get('authorization') || '';
-  if (!h.toLowerCase().startsWith('basic ')) return null;
-  try {
-    const txt = atob(h.slice(6));
-    const i = txt.indexOf(':');
-    if (i < 0) return null;
-    return { user: txt.slice(0, i), pass: txt.slice(i + 1) };
-  } catch { return null; }
-};
-const requireAuth = (env, req) => {
-  const cred = parseBasicAuth(req);
-  if (!cred) return false;
-  return (cred.user === env.USERNAME && cred.pass === env.PASSWORD);
-};
-const qstr = (url) => Object.fromEntries(new URL(url).searchParams.entries());
-const toBool = (v) => v === true || v === 'true' || v === '1' || v === 1;
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const NOT_FOUND = () =>
+  new Response("Not Found", { status: 404, headers: { "content-type": "text/plain" } });
 
-// map Airtable fields -> DB columns
-const FIELD_MAP = {
-  '商品貨號': 'sku',
-  '產品名稱': 'name',
-  '英文品名': 'name_en',
-  '品牌名稱': 'brand',
-  '類別': 'category',
-  '建議售價': 'msrp',
-  '國際條碼': 'barcode',
-  '箱入數': 'case_qty',
-  '商品介紹': 'description',
-  '成份/材質': 'materials',
-  '商品尺寸': 'size',
-  '重量g': 'weight_g',
-  '產地': 'origin',
-  '現貨商品': 'in_stock',
-  '商品圖檔': 'images' // attachment(s)
-};
+const TEXT = (html, init = 200) =>
+  new Response(html, {
+    status: init,
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
 
-// schema SQL (idempotent)
-const SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS products (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  sku TEXT NOT NULL UNIQUE,
-  name TEXT,
-  name_en TEXT,
-  brand TEXT,
-  category TEXT,
-  msrp REAL,
-  barcode TEXT,
-  case_qty INTEGER,
-  description TEXT,
-  materials TEXT,
-  size TEXT,
-  weight_g REAL,
-  origin TEXT,
-  in_stock INTEGER DEFAULT 0,
-  status TEXT DEFAULT 'active',
-  created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-);
-CREATE TABLE IF NOT EXISTS images (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  sku TEXT NOT NULL,
-  filename TEXT NOT NULL,
-  url TEXT,                    -- public url (worker route)
-  r2_key TEXT,                 -- ${sku}/${filename}
-  width INTEGER,
-  height INTEGER,
-  mime TEXT,
-  position INTEGER DEFAULT 0,
-  created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  UNIQUE (sku, filename)
-);
-CREATE INDEX IF NOT EXISTS idx_products_brand ON products (brand);
-CREATE INDEX IF NOT EXISTS idx_products_category ON products (category);
-CREATE INDEX IF NOT EXISTS idx_products_status ON products (status);
-CREATE INDEX IF NOT EXISTS idx_images_sku ON images (sku);
-`;
+/* ----------------------- HTML Templates (escaped) ----------------------- */
 
-async function ensureSchema(env) {
-  await env.DATABASE.exec(SCHEMA_SQL);
-}
-
-function buildLike(keyword) {
-  const kw = `%${keyword.replace(/[%_]/g, s => '\\' + s)}%`;
-  return { kw };
-}
-
-function first(arr, def = null) { return Array.isArray(arr) && arr.length ? arr[0] : def; }
-
-// ---- HTML (輕量內建；你也有獨立 index.html / admin/index.html，兩者擇一即可) ----
 const HTML_CATALOG = `<!doctype html><meta charset="utf-8"><title>Pet Republic｜商品清單</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <script src="https://cdn.tailwindcss.com"></script>
@@ -154,7 +79,7 @@ async function load(){
   const res=await fetch(u); const data=await res.json();
   const g=document.getElementById('grid'); g.innerHTML='';
   (data.items||[]).forEach(it=>{
-    const url=it.thumb|| (it.images && it.images[0]) || '';
+    const url=it.thumb||(it.images&&it.images[0])||'';
     const el=document.createElement('div');
     el.className='bg-white border rounded-xl overflow-hidden shadow';
     el.innerHTML=\`
@@ -170,9 +95,9 @@ async function load(){
   });
   if(state.page<=1) document.getElementById('prev').setAttribute('disabled','');
   else document.getElementById('prev').removeAttribute('disabled');
-  if((state.page*state.size)>= (data.total||0)) document.getElementById('next').setAttribute('disabled','');
+  if((state.page*state.size)>=(data.total||0)) document.getElementById('next').setAttribute('disabled','');
   else document.getElementById('next').removeAttribute('disabled');
-  // filters (brand/category chips)
+  // filters
   const box=document.getElementById('filters'); box.innerHTML='';
   const mk=(title, list, key)=>{
     const wrap=document.createElement('div');
@@ -180,7 +105,7 @@ async function load(){
     const row=document.createElement('div'); row.className='flex flex-wrap gap-2';
     ['全部',...list].forEach(v=>{
       const b=document.createElement('button');
-      b.className='px-3 py-1 rounded-full border text-sm '+ ((state[key]===v || (v==='全部' && !state[key]))?'bg-gray-900 text-white':'bg-white');
+      b.className='px-3 py-1 rounded-full border text-sm '+((state[key]===v||(v==='全部'&&!state[key]))?'bg-gray-900 text-white':'bg-white');
       b.textContent=v;
       b.onclick=()=>{state[key]=(v==='全部'?'':v); state.page=1; load();};
       row.appendChild(b);
@@ -201,399 +126,291 @@ window.addEventListener('DOMContentLoaded', load);
 const HTML_ADMIN = `<!doctype html><meta charset="utf-8"><title>Pet Republic｜後台</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <script src="https://cdn.tailwindcss.com"></script>
-<body class="bg-gray-50 text-gray-800">
+<body class="bg-slate-50 text-slate-800">
 <header class="sticky top-0 z-10 bg-white/90 backdrop-blur border-b">
-  <div class="max-w-3xl mx-auto px-4 py-3 flex items-center gap-3">
+  <div class="max-w-4xl mx-auto px-4 py-3 flex items-center gap-3">
     <h1 class="text-xl font-bold">Pet Republic｜後台</h1>
     <a class="ml-auto px-3 py-2 rounded-lg border" href="/">回前台清單頁</a>
   </div>
 </header>
-<main class="max-w-3xl mx-auto p-4">
-  <div class="p-5 bg-white rounded-xl border shadow-sm">
-    <h2 class="text-lg font-semibold mb-2">Airtable 同步</h2>
-    <p class="text-gray-500 mb-4">按下即可觸發一次匯入（僅管理員可用）。</p>
-    <button id="sync" class="px-4 py-2 rounded-lg bg-indigo-600 text-white">開始同步</button>
-    <pre id="out" class="mt-5 p-4 bg-slate-900 text-slate-100 rounded-lg overflow-auto text-sm">等待中…</pre>
-  </div>
+<main class="max-w-4xl mx-auto p-4">
+  <section class="bg-white rounded-2xl border shadow-sm p-6">
+    <h2 class="font-semibold text-lg mb-2">Airtable 同步</h2>
+    <p class="text-sm text-slate-500 mb-4">按下即可觸發一次匯入（僅管理員可用）。</p>
+    <button id="btnSync" class="px-4 py-2 rounded-lg bg-indigo-600 text-white">開始同步</button>
+    <pre id="out" class="mt-4 p-4 bg-slate-900 text-slate-100 rounded-xl overflow-auto text-sm">等待中…</pre>
+  </section>
 </main>
 <script>
-const out = document.getElementById('out');
-document.getElementById('sync').onclick = async ()=>{
-  out.textContent = '執行中…';
-  const res = await fetch('/sync-airtable', { method:'POST' });
-  const txt = await res.text();
-  out.textContent = txt;
+document.getElementById('btnSync').onclick=async()=>{
+  const res=await fetch('/sync-airtable',{method:'POST'});
+  const txt=await res.text();
+  document.getElementById('out').textContent=txt;
 };
 </script>
 `;
 
-// ---- R2 helpers ----
-async function r2FetchToBucket(env, url, key) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error('Fetch image failed: ' + res.status);
-  const ct = res.headers.get('content-type') || 'application/octet-stream';
-  await env.R2_BUCKET.put(key, res.body, { httpMetadata: { contentType: ct } });
-  return { mime: ct };
+/* ----------------------- Auth Helpers ----------------------- */
+
+function parseBasicAuth(req) {
+  const h = req.headers.get("authorization") || "";
+  const m = /^Basic\s+([A-Za-z0-9+/=]+)$/.exec(h);
+  if (!m) return null;
+  try {
+    const [user, pass] = atob(m[1]).split(":", 2);
+    return { user, pass };
+  } catch {
+    return null;
+  }
 }
 
-function publicImageURL(host, sku, filename) {
-  const base = `https://${host}`;
-  return `${base}/${encodeURIComponent(sku)}/${encodeURIComponent(filename)}`;
+function requireAuth(req, env) {
+  const cred = parseBasicAuth(req);
+  if (!cred || cred.user !== env.USERNAME || cred.pass !== env.PASSWORD) {
+    return new Response("Unauthorized", {
+      status: 401,
+      headers: { "WWW-Authenticate": 'Basic realm="pet-republic-admin"' },
+    });
+  }
+  return null;
 }
 
-// ---- Airtable sync ----
-async function syncAirtable(env, host) {
-  const token = env.AIRTABLE_API_TOKEN;
-  const baseId = env.AIRTABLE_BASE_ID;
-  const table = env.AIRTABLE_TABLE_NAME;
-  if (!token || !baseId || !table) return { imported: 0, images: 0, note: 'Airtable secrets not set' };
+/* ----------------------- SQL Helpers ----------------------- */
 
-  const base = `https://api.airtable.com/v0/${encodeURIComponent(baseId)}/${encodeURIComponent(table)}`;
-  let offset = '';
-  let imported = 0, imageCount = 0;
-  const seen = new Set();
-
-  await ensureSchema(env);
-
-  do {
-    const url = new URL(base);
-    if (offset) url.searchParams.set('offset', offset);
-    url.searchParams.set('pageSize', '50');
-    const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-    if (!res.ok) throw new Error('Airtable fetch failed: ' + res.status);
-    const data = await res.json();
-
-    for (const rec of (data.records || [])) {
-      const f = rec.fields || {};
-      const row = {};
-      for (const [k, v] of Object.entries(FIELD_MAP)) {
-        row[v] = f[k];
-      }
-      const sku = (row.sku || '').toString().trim();
-      if (!sku) continue;
-
-      seen.add(sku);
-
-      // normalize
-      const values = {
-        sku,
-        name: row.name || null,
-        name_en: row.name_en || null,
-        brand: row.brand || null,
-        category: row.category || null,
-        msrp: row.msrp ? Number(row.msrp) : null,
-        barcode: row.barcode || null,
-        case_qty: row.case_qty ? Number(row.case_qty) : null,
-        description: row.description || null,
-        materials: row.materials || null,
-        size: row.size || null,
-        weight_g: row.weight_g ? Number(row.weight_g) : null,
-        origin: row.origin || null,
-        in_stock: row.in_stock ? (toBool(row.in_stock) ? 1 : 0) : 0,
-        status: 'active'
-      };
-
-      // upsert product
-      await env.DATABASE.prepare(
-        "INSERT INTO products (sku,name,name_en,brand,category,msrp,barcode,case_qty,description,materials,size,weight_g,origin,in_stock,status,updated_at) " +
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now')) " +
-        "ON CONFLICT(sku) DO UPDATE SET name=excluded.name,name_en=excluded.name_en,brand=excluded.brand,category=excluded.category,msrp=excluded.msrp,barcode=excluded.barcode,case_qty=excluded.case_qty,description=excluded.description,materials=excluded.materials,size=excluded.size,weight_g=excluded.weight_g,origin=excluded.origin,in_stock=excluded.in_stock,status=excluded.status,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')"
-      ).bind(
-        values.sku, values.name, values.name_en, values.brand, values.category, values.msrp, values.barcode, values.case_qty,
-        values.description, values.materials, values.size, values.weight_g, values.origin, values.in_stock, values.status
-      ).run();
-
-      imported++;
-
-      // images (Airtable attachment)
-      const attachments = Array.isArray(row.images) ? row.images : [];
-      let pos = 0;
-      for (const att of attachments) {
-        const url = att.url || att.thumbnails?.large?.url || att.thumbnails?.full?.url;
-        if (!url) continue;
-        const fnameRaw = att.filename || url.split('/').pop().split('?')[0];
-        // 防止奇怪字元
-        const filename = fnameRaw.replace(/[^\w.\-]+/g, '_');
-        const r2Key = `${sku}/${filename}`;
-
-        // put into R2 (skip if exists)
-        const head = await env.R2_BUCKET.head(r2Key);
-        if (!head) {
-          try {
-            const meta = await r2FetchToBucket(env, url, r2Key);
-            imageCount++;
-            // be gentle to Airtable CDN
-            await sleep(150);
-          } catch (e) {
-            // ignore single failure
-          }
-        }
-
-        // upsert image record
-        const publicUrl = publicImageURL(host, sku, filename);
-        await env.DATABASE
-          .prepare("INSERT INTO images (sku, filename, url, r2_key, position) VALUES (?,?,?,?,?) ON CONFLICT(sku,filename) DO UPDATE SET url=excluded.url, r2_key=excluded.r2_key, position=excluded.position")
-          .bind(sku, filename, publicUrl, r2Key, pos++)
-          .run();
-      }
-    }
-
-    offset = data.offset || '';
-  } while (offset);
-
-  return { imported, images: imageCount };
-}
-
-// ---- API handlers ----
-async function listProducts(env, url) {
-  await ensureSchema(env);
-  const qp = qstr(url);
-  const page = Math.max(1, parseInt(qp.page || '1', 10));
-  const size = Math.min(100, Math.max(1, parseInt(qp.size || '24', 10)));
-  const offset = (page - 1) * size;
-  const params = [];
+async function queryList(env, params) {
+  const page = Math.max(1, Number(params.get("page") || 1));
+  const size = Math.min(100, Math.max(1, Number(params.get("size") || 24)));
   const where = [];
+  const args = [];
 
-  if (qp.q) {
-    const { kw } = buildLike(qp.q);
-    where.push("(sku LIKE ? ESCAPE '\\\\' OR name LIKE ? ESCAPE '\\\\' OR brand LIKE ? ESCAPE '\\\\' OR category LIKE ? ESCAPE '\\\\')");
-    params.push(kw, kw, kw, kw);
+  const q = params.get("q");
+  if (q) {
+    where.push("(sku LIKE ? OR name LIKE ? OR brand LIKE ? OR category LIKE ?)");
+    const like = `%${q}%`;
+    args.push(like, like, like, like);
   }
-  if (qp.brand) {
-    const arr = qp.brand.split(',').map(s => s.trim()).filter(Boolean);
-    if (arr.length) {
-      where.push('(' + arr.map(() => 'brand = ?').join(' OR ') + ')');
-      params.push(...arr);
-    }
-  }
-  if (qp.category) {
-    const arr = qp.category.split(',').map(s => s.trim()).filter(Boolean);
-    if (arr.length) {
-      where.push('(' + arr.map(() => 'category = ?').join(' OR ') + ')');
-      params.push(...arr);
-    }
-  }
-  if (qp.status) {
-    const arr = qp.status.split(',').map(s => s.trim()).filter(Boolean);
-    if (arr.length) {
-      where.push('(' + arr.map(() => 'status = ?').join(' OR ') + ')');
-      params.push(...arr);
-    }
-  }
+  const brand = params.get("brand");
+  if (brand) { where.push("brand = ?"); args.push(brand); }
 
-  const whereSQL = where.length ? ('WHERE ' + where.join(' AND ')) : '';
-  const totalRow = await env.DATABASE.prepare(`SELECT COUNT(*) AS c FROM products ${whereSQL}`).bind(...params).first();
-  const total = totalRow ? (totalRow.c || 0) : 0;
+  const category = params.get("category");
+  if (category) { where.push("category = ?"); args.push(category); }
 
-  const rows = await env.DATABASE.prepare(
-    `SELECT sku,name,brand,category,msrp,status 
-     FROM products ${whereSQL}
-     ORDER BY updated_at DESC
+  const status = params.get("status");
+  if (status) { where.push("status = ?"); args.push(status); }
+
+  const cond = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const offset = (page - 1) * size;
+
+  const totalRow = await env.DATABASE.prepare(`SELECT COUNT(*) as n FROM products ${cond}`).bind(...args).first();
+  const total = totalRow?.n || 0;
+
+  const items = await env.DATABASE.prepare(
+    `SELECT sku, name, brand, category, status, price, thumb 
+     FROM products ${cond}
+     ORDER BY created_at DESC
      LIMIT ? OFFSET ?`
-  ).bind(...params, size, offset).all();
+  ).bind(...args, size, offset).all();
 
-  // thumbs + facets
-  const items = [];
-  const brands = new Set(), categories = new Set();
-  for (const r of rows.results || []) {
-    // thumb (first image)
-    const img = await env.DATABASE.prepare("SELECT url FROM images WHERE sku=? ORDER BY position ASC, id ASC LIMIT 1").bind(r.sku).first();
-    items.push({ ...r, thumb: img ? img.url : null });
-    if (r.brand) brands.add(r.brand);
-    if (r.category) categories.add(r.category);
+  const brands = await env.DATABASE.prepare(`SELECT brand, COUNT(*) n FROM products GROUP BY brand ORDER BY n DESC LIMIT 30`).all();
+  const categories = await env.DATABASE.prepare(`SELECT category, COUNT(*) n FROM products GROUP BY category ORDER BY n DESC LIMIT 30`).all();
+
+  // images for each item (first one only to speed up)
+  const skus = (items?.results || []).map(r => r.sku);
+  const imagesMap = {};
+  if (skus.length) {
+    const qs = skus.map(() => "?").join(",");
+    const imgs = await env.DATABASE.prepare(
+      `SELECT sku, url FROM product_images WHERE sku IN (${qs}) GROUP BY sku`
+    ).bind(...skus).all();
+    (imgs?.results || []).forEach(r => { imagesMap[r.sku] = r.url; });
   }
 
-  return ok({ total, page, size, items, facets: { brands: [...brands], categories: [...categories] } });
+  const results = (items?.results || []).map(r => ({
+    ...r,
+    images: imagesMap[r.sku] ? [imagesMap[r.sku]] : [],
+  }));
+
+  return {
+    ok: true,
+    page, size, total,
+    items: results,
+    facets: {
+      brands: (brands?.results || []).map(b => b.brand).filter(Boolean),
+      categories: (categories?.results || []).map(c => c.category).filter(Boolean),
+    },
+  };
 }
 
-async function getProduct(env, sku) {
-  await ensureSchema(env);
-  const row = await env.DATABASE.prepare("SELECT * FROM products WHERE sku=?").bind(sku).first();
-  if (!row) return notFound();
-  const imgs = await env.DATABASE.prepare("SELECT filename,url,position FROM images WHERE sku=? ORDER BY position ASC, id ASC").bind(sku).all();
-  row.images = (imgs.results || []).map(x => x.url);
-  return ok({ item: row });
-}
+/* ----------------------- R2 Helpers ----------------------- */
 
-async function listImages(env, sku) {
-  await ensureSchema(env);
-  const imgs = await env.DATABASE.prepare("SELECT filename,url,position FROM images WHERE sku=? ORDER BY position ASC, id ASC").bind(sku).all();
-  return ok({ sku, images: (imgs.results || []) });
-}
-
-async function createProduct(env, data) {
-  await ensureSchema(env);
-  if (!data || !data.sku) return err('sku required', 400);
-  await env.DATABASE.prepare(
-    "INSERT INTO products (sku,name,brand,category,msrp,status) VALUES (?,?,?,?,?,?)"
-  ).bind(data.sku, data.name||null, data.brand||null, data.category||null, data.msrp||null, data.status||'active').run();
-  return ok({ message: 'created', sku: data.sku });
-}
-async function updateProduct(env, sku, data) {
-  await ensureSchema(env);
-  const fields = ['name','name_en','brand','category','msrp','barcode','case_qty','description','materials','size','weight_g','origin','in_stock','status'];
-  const sets = [], params = [];
-  for (const k of fields) {
-    if (k in data) { sets.push(k + '=?'); params.push(data[k]); }
-  }
-  if (!sets.length) return err('no fields', 400);
-  params.push(sku);
-  await env.DATABASE.prepare(`UPDATE products SET ${sets.join(',')}, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE sku=?`).bind(...params).run();
-  return ok({ message: 'updated', sku });
-}
-async function deleteProduct(env, sku) {
-  await ensureSchema(env);
-  await env.DATABASE.prepare("UPDATE products SET status='archived', updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE sku=?").bind(sku).run();
-  return ok({ message: 'archived', sku });
-}
-
-async function addImageRecord(env, sku, data, host) {
-  await ensureSchema(env);
-  if (!data || !data.filename) return err('filename required', 400);
-  const filename = String(data.filename).replace(/[^\w.\-]+/g, '_');
-  const r2Key = `${sku}/${filename}`;
-  const url = publicImageURL(host, sku, filename);
-  await env.DATABASE.prepare(
-    "INSERT INTO images (sku,filename,url,r2_key,position) VALUES (?,?,?,?,?) ON CONFLICT(sku,filename) DO UPDATE SET url=excluded.url,r2_key=excluded.r2_key,position=excluded.position"
-  ).bind(sku, filename, url, r2Key, data.position||0).run();
-  return ok({ message: 'image recorded', url });
-}
-async function delImageRecord(env, sku, filename) {
-  await ensureSchema(env);
-  filename = filename.replace(/[^\w.\-]+/g, '_');
-  const r2Key = `${sku}/${filename}`;
-  await env.DATABASE.prepare("DELETE FROM images WHERE sku=? AND filename=?").bind(sku, filename).run();
-  await env.R2_BUCKET.delete(r2Key);
-  return ok({ message: 'image deleted', sku, filename });
-}
-
-// Public R2 read: GET /:sku/:filename
-async function servePublicImage(env, sku, filename) {
-  const key = `${sku}/${filename}`;
+async function r2Get(env, key) {
   const obj = await env.R2_BUCKET.get(key);
-  if (!obj) return notFound();
-  const hdr = new Headers();
-  obj.writeHttpMetadata(hdr);
-  hdr.set('etag', obj.httpEtag);
-  return new Response(obj.body, { headers: hdr });
+  if (!obj) return NOT_FOUND();
+  const headers = new Headers(obj.httpMetadata);
+  if (!headers.get("content-type")) headers.set("content-type", "application/octet-stream");
+  return new Response(obj.body, { headers });
 }
 
-// ---- router ----
+/* ----------------------- Router ----------------------- */
+
 export default {
   async fetch(req, env, ctx) {
-    const url = new URL(req.url);
-    const path = url.pathname;
+    try {
+      const url = new URL(req.url);
+      const { pathname, searchParams } = url;
 
-    // help
-    if (req.method === 'GET' && path === '/api') {
-      return ok({
-        name: 'Pet Republic API',
-        routes: {
-          public: [
-            'GET  /                 -> catalog html',
-            'GET  /{sku}/{filename} -> public image (R2)',
-            'GET  /api/products     -> list products',
-            'GET  /api/products/:sku -> get product',
-            'GET  /api/products/:sku/images -> product images'
-          ],
-          protected_basic_auth: [
-            'GET    /admin                         -> admin html',
-            'POST   /api/products                  -> create',
-            'PUT    /api/products/:sku             -> update',
-            'DELETE /api/products/:sku             -> delete',
-            'POST   /api/products/:sku/images      -> add image record',
-            'DELETE /api/products/:sku/images/:fn  -> delete image record',
-            'POST   /sync-airtable                 -> trigger import'
-          ]
-        }
-      });
-    }
-
-    // index / admin
-    if (req.method === 'GET' && path === '/') {
-      return new Response(HTML_CATALOG, { headers: TEXT_HTML });
-    }
-    if (req.method === 'GET' && path === '/admin') {
-      if (!requireAuth(env, req)) {
-        return new Response('Unauthorized', { status: 401, headers: { 'www-authenticate': 'Basic realm="admin"' } });
+      // normalize: custom "/api" introspection
+      if (pathname === "/api") {
+        return JSON_OK({
+          ok: true,
+          name: "Pet Republic API",
+          routes: {
+            public: [
+              'GET  /                -> catalog html',
+              'GET  /{sku}/{filename} -> public image (R2)',
+              'GET  /api/products    -> list products',
+              'GET  /api/products/:sku -> get product',
+              'GET  /api/products/:sku/images -> product images',
+            ],
+            protected_basic_auth: [
+              'GET    /admin                           -> admin html',
+              'POST   /api/products                    -> create',
+              'PUT    /api/products/:sku               -> update',
+              'DELETE /api/products/:sku               -> delete',
+              'POST   /api/products/:sku/images        -> add image record',
+              'DELETE /api/products/:sku/images/:name  -> delete image record',
+              'POST   /sync-airtable                   -> trigger import (placeholder)',
+            ],
+          },
+        });
       }
-      return new Response(HTML_ADMIN, { headers: TEXT_HTML });
-    }
 
-    // Public API
-    if (req.method === 'GET' && path === '/api/products') {
-      return listProducts(env, req.url);
-    }
-    if (req.method === 'GET' && path.startsWith('/api/products/')) {
-      const parts = path.split('/').filter(Boolean); // ['api','products',':sku', 'images?']
-      const sku = decodeURIComponent(parts[2] || '');
-      if (!sku) return notFound();
-      if (parts.length === 4 && parts[3] === 'images') {
-        return listImages(env, sku);
+      // root: catalog page
+      if (pathname === "/" || pathname === "/index.html") {
+        return TEXT(HTML_CATALOG);
       }
-      if (parts.length === 3) return getProduct(env, sku);
-    }
 
-    // Basic-auth protected
-    const needAuth = (
-      (req.method === 'POST' && (path === '/api/products' || path === '/sync-airtable' || path.startsWith('/api/products/'))) ||
-      (req.method === 'PUT'  && path.startsWith('/api/products/')) ||
-      (req.method === 'DELETE' && path.startsWith('/api/products/'))
-    );
-    if (needAuth && !requireAuth(env, req)) {
-      return new Response('Unauthorized', { status: 401, headers: { 'www-authenticate': 'Basic realm="api"' } });
-    }
-
-    if (req.method === 'POST' && path === '/api/products') {
-      const body = await parseJSON(req);
-      return createProduct(env, body || {});
-    }
-    if (req.method === 'PUT' && path.startsWith('/api/products/')) {
-      const parts = path.split('/').filter(Boolean);
-      const sku = decodeURIComponent(parts[2] || '');
-      const body = await parseJSON(req) || {};
-      return updateProduct(env, sku, body);
-    }
-    if (req.method === 'DELETE' && path.startsWith('/api/products/')) {
-      const parts = path.split('/').filter(Boolean);
-      const sku = decodeURIComponent(parts[2] || '');
-      if (parts.length === 5 && parts[3] === 'images') {
-        const fn = decodeURIComponent(parts[4]);
-        return delImageRecord(env, sku, fn);
+      // admin (Basic Auth)
+      if (pathname === "/admin") {
+        const deny = requireAuth(req, env);
+        if (deny) return deny;
+        return TEXT(HTML_ADMIN);
       }
-      return deleteProduct(env, sku);
-    }
-    if (req.method === 'POST' && path.startsWith('/api/products/')) {
-      const parts = path.split('/').filter(Boolean);
-      // /api/products/:sku/images
-      if (parts.length === 4 && parts[3] === 'images') {
-        const sku = decodeURIComponent(parts[2]);
-        const body = await parseJSON(req) || {};
-        const host = url.host;
-        return addImageRecord(env, sku, body, host);
-      }
-    }
 
-    // Sync Airtable
-    if (req.method === 'POST' && path === '/sync-airtable') {
-      const host = url.host;
-      try {
-        const res = await syncAirtable(env, host);
-        return ok({ message: 'sync finished', ...res });
-      } catch (e) {
-        return err(String(e), 500);
+      // R2 public file: /:sku/:filename
+      const mImg = /^\/([^\/]+)\/([^\/]+)$/.exec(pathname);
+      if (mImg) {
+        const key = `${mImg[1]}/${mImg[2]}`;
+        return r2Get(env, key);
       }
-    }
 
-    // Public image: /:sku/:filename
-    if (req.method === 'GET') {
-      const parts = path.split('/').filter(Boolean);
-      if (parts.length === 2) {
-        const [sku, filename] = parts.map(decodeURIComponent);
-        return servePublicImage(env, sku, filename);
+      // API: list
+      if (pathname === "/api/products" && req.method === "GET") {
+        const data = await queryList(env, searchParams);
+        return JSON_OK(data);
       }
-    }
 
-    return notFound();
-  }
+      // API: single
+      const mSku = /^\/api\/products\/([^\/]+)$/.exec(pathname);
+      if (mSku && req.method === "GET") {
+        const sku = decodeURIComponent(mSku[1]);
+        const prod = await env.DATABASE.prepare(
+          "SELECT sku, name, brand, category, status, price, thumb, description FROM products WHERE sku = ? LIMIT 1"
+        ).bind(sku).first();
+        if (!prod) return NOT_FOUND();
+        const imgs = await env.DATABASE.prepare(
+          "SELECT filename, url FROM product_images WHERE sku = ? ORDER BY sort, filename"
+        ).bind(sku).all();
+        return JSON_OK({ ok: true, product: prod, images: imgs?.results || [] });
+      }
+
+      // API: images of sku
+      const mImgs = /^\/api\/products\/([^\/]+)\/images$/.exec(pathname);
+      if (mImgs && req.method === "GET") {
+        const sku = decodeURIComponent(mImgs[1]);
+        const imgs = await env.DATABASE.prepare(
+          "SELECT filename, url FROM product_images WHERE sku = ? ORDER BY sort, filename"
+        ).bind(sku).all();
+        return JSON_OK({ ok: true, items: imgs?.results || [] });
+      }
+
+      // ===== Protected (Basic Auth) =====
+      if (pathname.startsWith("/api/") || pathname === "/sync-airtable") {
+        const deny = requireAuth(req, env);
+        if (deny) return deny;
+      }
+
+      // Create
+      if (pathname === "/api/products" && req.method === "POST") {
+        const b = await req.json();
+        if (!b?.sku) return JSON_ERR("sku is required", 400);
+        await env.DATABASE.prepare(
+          `INSERT INTO products (sku, name, brand, category, status, price, thumb, description, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`
+        ).bind(b.sku, b.name || "", b.brand || "", b.category || "", b.status || "active",
+          b.price || 0, b.thumb || "", b.description || "").run();
+        return JSON_OK({ ok: true });
+      }
+
+      // Update
+      if (mSku && req.method === "PUT") {
+        const sku = decodeURIComponent(mSku[1]);
+        const b = await req.json();
+        await env.DATABASE.prepare(
+          `UPDATE products SET name=?, brand=?, category=?, status=?, price=?, thumb=?, description=? WHERE sku=?`
+        ).bind(b.name || "", b.brand || "", b.category || "", b.status || "active",
+          b.price || 0, b.thumb || "", b.description || "", sku).run();
+        return JSON_OK({ ok: true });
+      }
+
+      // Delete
+      if (mSku && req.method === "DELETE") {
+        const sku = decodeURIComponent(mSku[1]);
+        await env.DATABASE.prepare("DELETE FROM product_images WHERE sku=?").bind(sku).run();
+        await env.DATABASE.prepare("DELETE FROM products WHERE sku=?").bind(sku).run();
+        return JSON_OK({ ok: true });
+      }
+
+      // Add image record
+      if (mImgs && req.method === "POST") {
+        const sku = decodeURIComponent(mImgs[1]);
+        const b = await req.json();
+        if (!b?.filename) return JSON_ERR("filename required", 400);
+        // If you host on R2 at /sku/filename, you can build url here:
+        const url = b.url || `https://${urlHost(req)}/${encodeURIComponent(sku)}/${encodeURIComponent(b.filename)}`;
+        await env.DATABASE.prepare(
+          `INSERT INTO product_images (sku, filename, url, sort)
+           VALUES (?, ?, ?, ?)`
+        ).bind(sku, b.filename, url, Number(b.sort || 0)).run();
+        return JSON_OK({ ok: true });
+      }
+
+      // Delete image record
+      const mDelImg = /^\/api\/products\/([^\/]+)\/images\/([^\/]+)$/.exec(pathname);
+      if (mDelImg && req.method === "DELETE") {
+        const sku = decodeURIComponent(mDelImg[1]);
+        const filename = decodeURIComponent(mDelImg[2]);
+        await env.DATABASE.prepare("DELETE FROM product_images WHERE sku=? AND filename=?")
+          .bind(sku, filename).run();
+        return JSON_OK({ ok: true });
+      }
+
+      // Manual Airtable sync (placeholder)
+      if (pathname === "/sync-airtable" && req.method === "POST") {
+        return JSON_OK({
+          ok: true,
+          message: "已接收同步請求。請留意 D1 儀表板查詢數與 logs（此示範版回覆成功，不執行真實抓取）。"
+        });
+      }
+
+      return NOT_FOUND();
+    } catch (err) {
+      return JSON_ERR(String(err?.stack || err?.message || err), 500);
+    }
+  },
 };
+
+/* ----------------------- Utils ----------------------- */
+function urlHost(req) {
+  try { return new URL(req.url).host; } catch { return ""; }
+}
