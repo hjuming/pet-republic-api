@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
     steps:
       - name: Checkout
@@ -24,37 +24,28 @@ jobs:
       - name: Install deps
         run: npm install
 
-      - name: Apply D1 migrations (if any)
+      # ✅ 關鍵修正：用 binding 名稱 DATABASE，而不是 image-db
+      - name: Apply D1 migrations (remote)
+        shell: bash
         run: |
           if [ -d "migrations" ]; then
-            echo "🔧 Found migrations folder, applying..."
-            npx wrangler d1 migrations apply image-db --remote
+            echo "🔧 Found migrations folder, applying to D1 (binding: DATABASE)..."
+            npx wrangler d1 migrations apply DATABASE --remote
           else
             echo "⚠️ No migrations folder found. Skipping."
           fi
 
-      - name: Deploy with Wrangler
+      - name: Deploy Worker
         run: npx wrangler deploy
 
-      # （可選）自動上傳 Secrets；你若改在 Dashboard 管，就把這步刪掉
-      - name: Set secrets (optional)
-        if: always()
+      # （選用）把密鑰寫回 Worker，避免被覆蓋時遺失
+      - name: Upload secrets to Worker
         shell: bash
         run: |
           set -euo pipefail
-          put_secret() {
-            local NAME="$1"
-            local VALUE="$2"
-            if [ -n "$VALUE" ]; then
-              echo "Uploading secret $NAME..."
-              # ⚠️ wrangler v4 不支援 --yes；以 stdin 傳入值即可非互動寫入
-              echo "$VALUE" | npx wrangler secret put "$NAME"
-            else
-              echo "Skipping $NAME (not set)"
-            fi
-          }
-          put_secret "USERNAME" "${{ secrets.USERNAME }}"
-          put_secret "PASSWORD" "${{ secrets.PASSWORD }}"
-          put_secret "AIRTABLE_API_TOKEN" "${{ secrets.AIRTABLE_API_TOKEN }}"
-          put_secret "AIRTABLE_BASE_ID" "${{ secrets.AIRTABLE_BASE_ID }}"
-          put_secret "AIRTABLE_TABLE_NAME" "${{ secrets.AIRTABLE_TABLE_NAME }}"
+          put_secret () { local NAME="$1"; local VALUE="$2"; if [ -n "$VALUE" ]; then echo "$VALUE" | npx wrangler secret put "$NAME"; else echo "Skip $NAME (empty)"; fi; }
+          put_secret "USERNAME"               "${{ secrets.USERNAME }}"
+          put_secret "PASSWORD"               "${{ secrets.PASSWORD }}"
+          put_secret "AIRTABLE_API_TOKEN"     "${{ secrets.AIRTABLE_API_TOKEN }}"
+          put_secret "AIRTABLE_BASE_ID"       "${{ secrets.AIRTABLE_BASE_ID }}"
+          put_secret "AIRTABLE_TABLE_NAME"    "${{ secrets.AIRTABLE_TABLE_NAME }}"
