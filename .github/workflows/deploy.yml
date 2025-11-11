@@ -13,27 +13,86 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
     steps:
-      - name: Checkout
+      # ==========================================================
+      # 1️⃣ 取得程式碼
+      # ==========================================================
+      - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ==========================================================
+      # 2️⃣ 設定 Node.js 環境（不使用快取）
+      # ==========================================================
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          # cache: 'npm'  # 先關掉，等有 package-lock.json 再開
+          # ⚠️ 若之後加入 package-lock.json，可打開 cache
+          # cache: 'npm'
 
-      - name: Install deps
+      # ==========================================================
+      # 3️⃣ 安裝依賴套件
+      # ==========================================================
+      - name: Install dependencies
         run: npm install
 
+      # ==========================================================
+      # 4️⃣ 自動執行 D1 migrations（確保資料表結構正確）
+      # ==========================================================
+      - name: Apply D1 migrations (remote)
+        run: |
+          if [ -d "migrations" ]; then
+            echo "🔧 Found migrations folder, applying..."
+            npx wrangler d1 migrations apply image-db --remote
+          else
+            echo "⚠️ No migrations folder found. Skipping."
+          fi
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ env.CLOUDFLARE_API_TOKEN }}
+
+      # ==========================================================
+      # 5️⃣ 部署至 Cloudflare Workers
+      # ==========================================================
       - name: Deploy with Wrangler
         run: npx wrangler deploy
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ env.CLOUDFLARE_API_TOKEN }}
 
-      # （可選）自動上傳 Secrets；已設在 Dashboard 可移除
+      # ==========================================================
+      # 6️⃣ 上傳 Secrets（可選，若 Dashboard 已設可省略）
+      # ==========================================================
       - name: Set secrets (optional)
         if: always()
         run: |
-          if [ -n "${{ secrets.USERNAME }}" ]; then echo "${{ secrets.USERNAME }}" | npx wrangler secret put USERNAME --yes; fi
-          if [ -n "${{ secrets.PASSWORD }}" ]; then echo "${{ secrets.PASSWORD }}" | npx wrangler secret put PASSWORD --yes; fi
-          if [ -n "${{ secrets.AIRTABLE_API_TOKEN }}" ]; then echo "${{ secrets.AIRTABLE_API_TOKEN }}" | npx wrangler secret put AIRTABLE_API_TOKEN --yes; fi
-          if [ -n "${{ secrets.AIRTABLE_BASE_ID }}" ]; then echo "${{ secrets.AIRTABLE_BASE_ID }}" | npx wrangler secret put AIRTABLE_BASE_ID --yes; fi
-          if [ -n "${{ secrets.AIRTABLE_TABLE_NAME }}" ]; then echo "${{ secrets.AIRTABLE_TABLE_NAME }}" | npx wrangler secret put AIRTABLE_TABLE_NAME --yes; fi
+          put_secret() {
+            local NAME="$1"
+            local VALUE="$2"
+            if [ -n "$VALUE" ]; then
+              echo "Uploading secret $NAME..."
+              echo "$VALUE" | npx wrangler secret put "$NAME" --yes
+            else
+              echo "Skipping $NAME (not set)"
+            fi
+          }
+
+          put_secret "USERNAME" "${{ secrets.USERNAME }}"
+          put_secret "PASSWORD" "${{ secrets.PASSWORD }}"
+          put_secret "AIRTABLE_API_TOKEN" "${{ secrets.AIRTABLE_API_TOKEN }}"
+          put_secret "AIRTABLE_BASE_ID" "${{ secrets.AIRTABLE_BASE_ID }}"
+          put_secret "AIRTABLE_TABLE_NAME" "${{ secrets.AIRTABLE_TABLE_NAME }}"
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ env.CLOUDFLARE_API_TOKEN }}
+
+      # ==========================================================
+      # 7️⃣ 完成訊息
+      # ==========================================================
+      - name: ✅ Deployment summary
+        run: |
+          echo "============================================"
+          echo "🚀 寵兒共和國 API 已成功部署"
+          echo "Worker: pet-republic-api"
+          echo "D1 Database: image-db"
+          echo "R2 Bucket: my-images-bucket"
+          echo "============================================"
