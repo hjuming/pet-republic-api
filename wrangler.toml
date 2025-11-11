@@ -1,0 +1,24 @@
+name = "pet-republic-api" # 你的 Worker 名稱
+main = "src/index.js"
+compatibility_date = "2023-12-01"
+
+# ❗️❗️ 設定 Cron Trigger，每 10 分鐘執行一次
+[triggers]
+crons = ["*/10 * * * *"]
+
+# 綁定 D1 資料庫
+[[d1_databases]]
+binding = "DATABASE" # 程式碼中用 env.DATABASE
+database_name = "image-db" # 你的 D1 資料庫名稱
+
+# 綁定 R2 儲存桶
+[[r2_buckets]]
+binding = "R2_BUCKET" # 程式碼中用 env.R2_BUCKET
+bucket_name = "my-images-bucket" # 你的 R2 儲存桶名稱
+
+# 綁定 Secret
+[secrets]
+"AIRTABLE_API_TOKEN"
+"USERNAME"
+"PASSWORD"
+"DOMAIN"
