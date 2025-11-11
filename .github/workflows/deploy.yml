@@ -70,12 +70,14 @@ jobs:
             --env production \
             --config wrangler.toml
 
-      - name: Apply D1 migrations (binding=DATABASE)
+      # ✅ 修正：名稱從 binding=DATABASE 改為 database_name=image-db
+      - name: Apply D1 migrations (database_name=image-db)
         if: ${{ hashFiles('migrations/**') != '' }}
         run: |
           echo "Migrations found:"
           ls -1 migrations
-          npx wrangler d1 migrations apply DATABASE \
+          # ✅ 修正：指令的目標從 'DATABASE' (binding) 改為 'image-db' (database_name)
+          npx wrangler d1 migrations apply image-db \
             --remote \
             --env production \
             --config wrangler.toml
