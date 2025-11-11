@@ -1,7 +1,4 @@
-# 你的 Worker 名稱 (例如 pet-republic-api)
 name = "pet-republic-api"
-
-# 你的程式碼進入點
 main = "src/index.js"
 compatibility_date = "2023-12-01"
 
@@ -11,20 +8,21 @@ crons = ["*/10 * * * *"]
 
 # 綁定 D1 資料庫
 [[d1_databases]]
-binding = "DATABASE" # 程式碼中用 env.DATABASE
-database_name = "image-db" # 你的 D1 資料庫名稱
+binding = "DATABASE"
+database_name = "image-db"
 database_id = "" 
 
 # 綁定 R2 儲存桶
 [[r2_buckets]]
-binding = "R2_BUCKET" # 程式碼中用 env.R2_BUCKET
-bucket_name = "my-images-bucket" # 你的 R2 儲存桶名稱
+binding = "R2_BUCKET"
+bucket_name = "my-images-bucket"
 
-# 綁定變數 (這些值將被 GitHub Actions 中的 "wrangler secret put" 指令覆蓋)
-[vars]
-AIRTABLE_API_TOKEN = "placeholder"
-USERNAME = "placeholder"
-PASSWORD = "placeholder"
-DOMAIN = "placeholder"
-AIRTABLE_BASE_ID = "placeholder"
-AIRTABLE_TABLE_NAME = "placeholder"
+# 綁定 Secret (注意：這裡的語法是 wrangler 4.x 支援的)
+# 我們的 deploy.yml 腳本會負責 "put" 這些值
+[secrets]
+"AIRTABLE_API_TOKEN"
+"USERNAME"
+"PASSWORD"
+"DOMAIN"
+"AIRTABLE_BASE_ID"
+"AIRTABLE_TABLE_NAME"
