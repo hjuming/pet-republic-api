@@ -2,7 +2,7 @@ name = "pet-republic-api" # 你的 Worker 名稱
 main = "src/index.js"
 compatibility_date = "2023-12-01"
 
-# ❗️❗️ 設定 Cron Trigger，每 10 分鐘執行一次
+# 設定 Cron Trigger，每 10 分鐘執行一次
 [triggers]
 crons = ["*/10 * * * *"]
 
