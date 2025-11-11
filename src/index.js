@@ -1,19 +1,14 @@
 /* * =================================================================
- * == 寵兒共和國-商品圖庫管理系統 v3.1 (Cron Trigger 版) ==
+ * == 寵兒共和國-商品圖庫管理系統 v3.2 (全 Secret 版) ==
  * * =================================================================
- * 1. fetch()
- * - /sync-airtable: 從 Airtable 抓取「資料」存入 D1
- * - /: 顯示一個簡單的管理頁面
- * - /SKU/image.jpg: 處理 R2 圖片請求
- * 2. scheduled() (由 Cron 觸發)
- * - 在背景從 D1 讀取未下載的圖片，下載並存入 R2
+ * 1. (更新) Airtable ID 和名稱現在從 env Secrets 讀取
  * =================================================================
  */
 
-// ❗️❗️ 動作：請將這兩個值換成你 Airtable 上的資訊 ❗️❗️
-const AIRTABLE_BASE_ID = "appXXXXXXXXXXXXXX"; // 你的 Base ID (app... 開頭)
-const AIRTABLE_TABLE_NAME = "商品資料"; // 你的 Table Name (例如 "商品資料")
-// ❗️❗️ 動作：請將這兩個值換成你 Airtable 上的資訊 ❗️❗️
+// ❗️❗️ 動作：我們不再需要手動填寫這裡 ❗️❗️
+// const AIRTABLE_BASE_ID = "appXXXXXXXXXXXXXX"; 
+// const AIRTABLE_TABLE_NAME = "商品資料"; 
+// ❗️❗️ 動作：我們不再需要手動填寫這裡 ❗️❗️
 
 
 export default {
@@ -51,7 +46,7 @@ export default {
         
         // 首頁
         return new Response(
-          `<h1>寵兒共和國 API 系統 (v3.1 Cron)</h1><a href="/sync-airtable">點此開始同步 Airtable</a><p><small>(注意：這需要密碼)</small></p>`,
+          `<h1>寵兒共和國 API 系統 (v3.2 Cron)</h1><a href="/sync-airtable">點此開始同步 Airtable</a><p><small>(注意：這需要密碼)</small></p>`,
           { headers: { 'Content-Type': 'text/html;charset=UTF-8' } }
         );
     }
@@ -80,6 +75,16 @@ export default {
 
       for (const product of results) {
         const { sku, image_file, airtable_image_url } = product;
+        
+        // 確保 image_file 不是 null
+        if (!image_file) {
+           console.log(`Cron: Skipping SKU ${sku} due to missing image_file.`);
+           d1UpdateStatements.push(
+            env.DATABASE.prepare("UPDATE products SET image_synced = 'F' WHERE sku = ?").bind(sku) // 標記為失敗
+          );
+           continue;
+        }
+        
         const r2Key = `${sku}/${image_file}`; // 最終 R2 路徑
 
         try {
@@ -135,7 +140,14 @@ export default {
  * (由 /sync-airtable 觸發)
  */
 async function syncFromAirtable(env) {
-  const { DATABASE, AIRTABLE_API_TOKEN } = env;
+  // ❗️❗️ [更新]：從 env 讀取所有 Secret ❗️❗️
+  const { DATABASE, AIRTABLE_API_TOKEN, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME } = env;
+
+  if (!AIRTABLE_API_TOKEN || !AIRTABLE_BASE_ID || !AIRTABLE_TABLE_NAME) {
+    console.error("Error: Airtable Secrets (TOKEN, BASE_ID, TABLE_NAME) are not configured in Worker Secrets.");
+    return; // 終止執行
+  }
+
   const airtableApiUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_NAME}`;
 
   let allRecords = [];
@@ -224,17 +236,27 @@ async function syncFromAirtable(env) {
 }
 
 /**
- * [輔助] 清理 Airtable 資料 (和 v3.0 一樣)
+ * [輔助] 清理 Airtable 資料
  */
 function cleanAirtableRecord(fields) {
   let image_file = null;
   let airtable_image_url = null;
   if (fields['商品圖檔']) {
+    // 嘗試從 "檔名 (URL)" 格式中提取
     const regex = /([\w.-]+\.(jpg|jpeg|png|webp))\s*\((https?:\/\/[^)]+)\)/i;
     const match = String(fields['商品圖檔']).match(regex);
     if (match) {
       image_file = match[1].replace(/\s+/g, '_'); // 清理檔名中的空格
       airtable_image_url = match[3];
+    } else if (String(fields['商品圖檔']).startsWith('http')) {
+      // 備用方案：如果只有 URL，嘗試從 URL 中猜測檔名
+      try {
+        const url = new URL(String(fields['商品圖檔']).split(',')[0]); // 只取第一個 URL
+        airtable_image_url = url.href;
+        image_file = url.pathname.split('/').pop().replace(/\s+/g, '_');
+      } catch (e) {
+        // 格式無法解析
+      }
     }
   }
 
@@ -251,15 +273,15 @@ function cleanAirtableRecord(fields) {
     case_pack_size: parseInt(fields['箱入數'], 10) || null,
     msrp: parseFloat(String(fields['建議售價']).replace(/[$,]/g, '')) || null,
     barcode: fields['國際條碼'] || null,
-    dimensions_cm: fields['商品尺寸'] || null, 
-    weight_g: parseFloat(String(fields['重量g']).replace('g', '')) || null,
+    dimensions_cm: fields['商品尺寸（cm）'] || fields['商品尺寸'] || null, 
+    weight_g: parseFloat(String(fields['重量（g）'] || fields['重量g']).replace('g', '')) || null,
     origin: fields['產地'] || null,
-    in_stock: (fields['現貨商品'] === '是' || fields['現貨商品'] === 'Y') ? 'Y' : 'N'
+    in_stock: (fields['現貨商品（Y/N）'] === '是' || fields['現貨商品（Y/N）'] === 'Y') ? 'Y' : 'N'
   };
 }
 
 /**
- * [輔助] 處理圖片請求 (和 v3.0 一樣)
+ * [輔助] 處理圖片請求
  */
 async function handleImageRequest(request, R2_BUCKET) {
   const { pathname } = new URL(request.url);
@@ -283,7 +305,7 @@ async function handleImageRequest(request, R2_BUCKET) {
 }
 
 /**
- * [輔助] 認證 (和 v3.0 一樣)
+ * [輔助] 認證
  */
 function authenticate(request, USERNAME, PASSWORD) {
   const authHeader = request.headers.get('Authorization');
