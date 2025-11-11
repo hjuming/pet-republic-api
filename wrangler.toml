@@ -2,8 +2,8 @@
 name = "pet-republic-api"
 main = "src/index.js"
 compatibility_date = "2024-10-01"
+# 
 workers_dev = true
-account_id = "7f62a5bc86f62578367c93b8a1e0f131"
 
 # ========= Vars =========
 [vars]
@@ -15,10 +15,9 @@ binding = "R2_BUCKET"
 bucket_name = "my-images-bucket"
 
 # ========= D1（預設環境）=========
-# 
 [[d1_databases]]
-binding = "DATABASE"            # <— 
-database_name = "image-db"      # <— 
+binding = "DATABASE"
+database_name = "image-db"
 migrations_dir = "migrations"
 
 # ========= Cron（選填）=========
@@ -29,6 +28,12 @@ crons = ["*/30 * * * *"]
 [env.production]
 account_id = "7f62a5bc86f62578367c93b8a1e0f131"
 
+# ✅ 
+# 
+workers_dev = false
+# ✅ 
+routes = ["image.wedo.pet/*"]
+
 [env.production.vars]
 MAX_IMAGE_MB = "20"
 
@@ -36,9 +41,6 @@ MAX_IMAGE_MB = "20"
 binding = "R2_BUCKET"
 bucket_name = "my-images-bucket"
 
-# ✅ 修正：
-# 根據最新的錯誤日誌 (WARNING)，
-# 我們必須在 `env.production` 區塊內也明確定義 D1 資料庫。
 [[env.production.d1_databases]]
 binding = "DATABASE"
 database_name = "image-db"
