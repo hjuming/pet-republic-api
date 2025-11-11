@@ -1,10 +1,8 @@
-// src/index.js
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
 
-    // 小工具
     const json = (data, status = 200, extra = {}) =>
       new Response(JSON.stringify(data, null, 2), {
         status,
@@ -22,9 +20,7 @@ export default {
       return user === env.USERNAME && pass === env.PASSWORD;
     };
 
-    // ========== 路由 ==========
-
-    // 根目錄：列出可用端點
+    // 根目錄
     if (request.method === "GET" && path === "/") {
       return json({
         ok: true,
@@ -46,7 +42,7 @@ export default {
       });
     }
 
-    // 靜態管理頁（簡化版）
+    // 後台頁
     if (request.method === "GET" && path === "/admin") {
       if (!requireBasicAuth()) {
         return new Response("Unauthorized", {
@@ -77,7 +73,7 @@ export default {
       return text(html, 200, { "content-type": "text/html; charset=utf-8" });
     }
 
-    // 手動觸發 Airtable 同步（示範：僅回應成功訊息；真正匯入邏輯可再接）
+    // 手動同步（示範回覆）
     if (request.method === "POST" && path === "/sync-airtable") {
       if (!requireBasicAuth()) {
         return new Response("Unauthorized", {
@@ -104,7 +100,7 @@ export default {
       }
     }
 
-    // 單一產品（注意：避免未宣告變數，改用局部 const）
+    // 單一產品
     const productSkuMatch = path.match(/^\/api\/products\/([^/]+)$/);
     if (request.method === "GET" && productSkuMatch) {
       const skuParam = decodeURIComponent(productSkuMatch[1]);
@@ -118,7 +114,7 @@ export default {
       }
     }
 
-    // 產品圖片清單
+    // 產品圖片
     const imagesSkuMatch = path.match(/^\/api\/products\/([^/]+)\/images$/);
     if (request.method === "GET" && imagesSkuMatch) {
       const skuParam = decodeURIComponent(imagesSkuMatch[1]);
