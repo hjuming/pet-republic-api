@@ -1,39 +1,77 @@
-name: Deploy Product API Worker
+name: Deploy
 
 on:
   push:
-    branches:
-      - main 
+    branches: [ main ]
+  workflow_dispatch:
+
+# 避免併發部署踩到彼此
+concurrency:
+  group: pet-republic-api-deploy
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Cloudflare 帳號與 API Token 來自 GitHub Secrets
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
-    name: Deploy
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20' 
-      
-      - name: Install dependencies
-        run: npm install
+    runs-on: ubuntu-24.04
 
-      # 部署 Worker
-      - name: Deploy Worker
-        run: npm run deploy
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🚀 Wrangler deploy
+        run: npx wrangler deploy
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          
-      # 設定 Worker 執行時所需的 Secret
-      - name: Set Worker Secrets
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ env.CLOUDFLARE_API_TOKEN }}
+
+      # 將以下 Secrets（如有提供）寫入 Cloudflare Worker。
+      # 這些名稱要與程式內使用的 env.* 相同。
+      - name: 🔐 Upload Worker secrets (if provided)
+        shell: bash
         run: |
-          echo ${{ secrets.AIRTABLE_API_TOKEN }} | npx wrangler secret put AIRTABLE_API_TOKEN
-          echo ${{ secrets.USERNAME }} | npx wrangler secret put USERNAME
-          echo ${{ secrets.PASSWORD }} | npx wrangler secret put PASSWORD
-          echo ${{ secrets.DOMAIN }} | npx wrangler secret put DOMAIN
-          echo ${{ secrets.AIRTABLE_BASE_ID }} | npx wrangler secret put AIRTABLE_BASE_ID         # <-- [新] 新增這一行
-          echo ${{ secrets.AIRTABLE_TABLE_NAME }} | npx wrangler secret put AIRTABLE_TABLE_NAME # <-- [新] 新增這一行
+          set -euo pipefail
+
+          put_secret () {
+            local NAME="$1"
+            local VALUE="$2"
+            if [ -n "${VALUE}" ]; then
+              echo "• putting secret: ${NAME}"
+              # 以 stdin 方式寫入，重覆執行也安全
+              printf '%s' "${VALUE}" | npx wrangler secret put "${NAME}" --quiet
+            else
+              echo "• skip ${NAME} (not provided)"
+            fi
+          }
+
+          put_secret "AIRTABLE_API_TOKEN"   "${{ secrets.AIRTABLE_API_TOKEN }}"
+          put_secret "AIRTABLE_BASE_ID"     "${{ secrets.AIRTABLE_BASE_ID }}"
+          put_secret "AIRTABLE_TABLE_NAME"  "${{ secrets.AIRTABLE_TABLE_NAME }}"
+          put_secret "USERNAME"             "${{ secrets.BASIC_AUTH_USERNAME || secrets.USERNAME }}"
+          put_secret "PASSWORD"             "${{ secrets.BASIC_AUTH_PASSWORD || secrets.PASSWORD }}"
+          put_secret "DOMAIN"               "${{ secrets.DOMAIN }}"
+
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ env.CLOUDFLARE_API_TOKEN }}
+
+      - name: ✅ Summary
+        run: |
+          echo "Deployed to workers.dev (and your custom domain if routed in dashboard)."
+          echo "Worker: pet-republic-api"
