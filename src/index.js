@@ -35,7 +35,6 @@ async function syncAirtable(env) {
 
 export default {
   /**
-   * ✅ 
    * * */
   async scheduled(controller, env, ctx) {
     console.log(`[cron] 偵測到排程觸發: ${controller.cron}`);
@@ -60,12 +59,13 @@ export default {
         return new Response(res.body, { status: res.status, headers: h });
       };
 
+      // ✅ 
       if (request.method === "OPTIONS") {
         return new Response(null, {
           headers: {
             "access-control-allow-origin": "*",
             "access-control-allow-headers": "authorization,content-type",
-            "access-control-allow-methods", "GET,POST,OPTIONS",
+            "access-control-allow-methods": "GET,POST,OPTIONS", // <--- 
           },
         });
       }
@@ -151,7 +151,7 @@ export default {
         return text(html, 200, { "content-type": "text/html; charset=utf-8" });
       }
 
-      // ✅ 
+      // 
       if (request.method === "POST" && path === "/sync-airtable") {
         if (!requireBasicAuth()) {
           return withCors(new Response("Unauthorized", {
@@ -210,7 +210,7 @@ export default {
       const fileMatch = path.match(/^\/([^/]+)\/([^/]+)$/);
       if (request.method === "GET" && fileMatch) {
         const bucketKey = `${decodeURIComponent(fileMatch[1])}/${decodeURIComponent(fileMatch[2])}`;
-        const obj = await env.R2_BUCKET.get(bucketKey);
+        const obj = await env.R2_BUCKET.get(obj);
         if (!obj) return text("Not Found", 404);
         const headers = new Headers();
         if (obj.httpMetadata?.contentType) headers.set("content-type", obj.httpMetadata.contentType);
