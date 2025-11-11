@@ -9,11 +9,12 @@ jobs:
   deploy:
     runs-on: ubuntu-24.04
     env:
-      # 提供給 wrangler 的金鑰（請到 repo Settings > Secrets and variables > Actions 設定）
+      # 提供給 wrangler 的 Token（請在 Secrets 設定）
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: d7700d5b696e5584f6c1fcc028b6e803
+      # 與 wrangler whoami 顯示相同帳號 ID
+      CLOUDFLARE_ACCOUNT_ID: 7f62a5bc86f62578367c93b8a1e0f131
 
-      # 這些是要寫入 Worker Secrets 的業務金鑰（可選）
+      # （選填）要寫入 Worker Secrets 的業務金鑰
       USERNAME: ${{ secrets.PET_API_USERNAME }}
       PASSWORD: ${{ secrets.PET_API_PASSWORD }}
       AIRTABLE_API_TOKEN: ${{ secrets.AIRTABLE_API_TOKEN }}
@@ -40,7 +41,6 @@ jobs:
           npx wrangler --version
           npx wrangler whoami || true
 
-      # 將必要金鑰寫入 Worker Secrets（若環境未設就略過）
       - name: Upload Worker Secrets (idempotent)
         shell: bash
         run: |
@@ -50,7 +50,6 @@ jobs:
             local VALUE="$2"
             if [ -n "${VALUE}" ]; then
               echo "Uploading secret ${NAME}..."
-              # wrangler v4 直接從 stdin 讀值
               echo -n "${VALUE}" | npx wrangler secret put "${NAME}" --env production --config wrangler.toml
             else
               echo "Skipping ${NAME} (not set)"
@@ -62,18 +61,14 @@ jobs:
           put_secret "AIRTABLE_BASE_ID" "${AIRTABLE_BASE_ID:-}"
           put_secret "AIRTABLE_TABLE_NAME" "${AIRTABLE_TABLE_NAME:-}"
 
-      # （可選）列出帳號下所有 D1，便於核對名稱與 ID
       - name: List D1 databases (debug)
         run: npx wrangler d1 list --env production --config wrangler.toml
 
-      # 先跑一個 ping 確認名稱解析與權限無誤（可選但很有用）
       - name: Ping D1 by name (debug)
         run: npx wrangler d1 execute image-db --command "SELECT 'ok' AS ping;" --remote --env production --config wrangler.toml
 
-      # 以「名稱」執行遷移 —— 方案 A 的關鍵：不使用 database_id
       - name: Apply D1 migrations (by database_name)
         run: npx wrangler d1 migrations apply image-db --remote --env production --config wrangler.toml
 
-      # 部署 Worker（可根據你的專案結構增減 build 步驟）
       - name: Deploy Worker
         run: npx wrangler deploy --env production --config wrangler.toml
