@@ -78,7 +78,7 @@ jobs:
             --env production \
             --config wrangler.toml
 
-      # ❶ 以 JSON 輸出解析出 image-db 的 UUID，寫入 $GITHUB_ENV 為 DB_ID
+      # ❶ 解析 image-db 的 UUID -> $DB_ID
       - name: Resolve D1 DB UUID
         id: d1id
         shell: bash
@@ -89,8 +89,9 @@ jobs:
           echo "DB_ID=$DB_ID"
           echo "DB_ID=$DB_ID" >> "$GITHUB_ENV"
 
-      # ❷ 用 UUID + 指定 migrations 目錄「直接」套遷移（繞過名稱/綁定解析）
-      - name: Apply D1 migrations (by UUID)
+      # ❷ 用 UUID + 指定 migrations 目錄「直接」套遷移
+      # ⚠️ 關鍵修正：即使有 --database-id，也要傳入位置參數 <database>（這裡用 image-db）
+      - name: Apply D1 migrations (UUID + positional)
         shell: bash
         run: |
           set -euo pipefail
@@ -102,12 +103,14 @@ jobs:
             echo "❌ DB_ID not resolved."
             exit 1
           fi
-          npx wrangler d1 migrations apply \
+          npx wrangler d1 migrations apply "image-db" \
             --database-id "$DB_ID" \
             --migrations-dir "migrations" \
-            --remote
+            --remote \
+            --env production \
+            --config wrangler.toml
 
-      # 部署 Worker（你現有 wrangler.toml 的 name/account_id/bindings 會生效）
+      # 部署 Worker
       - name: Deploy Worker
         shell: bash
         run: |
