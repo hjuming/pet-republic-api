@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>寵兒共和國｜商品管理（Admin）</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .btn { @apply inline-flex items-center justify-center rounded-lg px-4 py-2 font-medium transition; }
+    .btn-primary { @apply bg-teal-600 text-white hover:bg-teal-700; }
+    .btn-gray { @apply bg-gray-100 text-gray-800 hover:bg-gray-200; }
+    .btn-danger { @apply bg-rose-600 text-white hover:bg-rose-700; }
+    .input { @apply w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500; }
+    .label { @apply text-sm font-medium text-gray-700; }
+    .badge { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold; }
+    .badge-green { @apply bg-emerald-100 text-emerald-700; }
+    .badge-gray { @apply bg-gray-100 text-gray-700; }
+    .badge-amber { @apply bg-amber-100 text-amber-700; }
+    .badge-rose { @apply bg-rose-100 text-rose-700; }
+    .modal-mask { @apply fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50; }
+    .card { @apply bg-white rounded-xl shadow border; }
+    .table th { @apply text-left text-xs font-semibold tracking-wider text-gray-500 uppercase px-3 py-2; }
+    .table td { @apply px-3 py-2 align-top text-sm; }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+  <div class="max-w-7xl mx-auto px-4 py-6">
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-6">
+      <div>
+        <h1 class="text-2xl font-bold">🐾 寵兒共和國｜商品管理</h1>
+        <p class="text-sm text-gray-600">前端單檔後台 · 對接 Cloudflare Worker API（D1 + R2）</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <button id="btn-new" class="btn btn-primary">＋ 新增商品</button>
+        <button id="btn-logout" class="btn btn-gray">登出</button>
+      </div>
+    </div>
+
+    <!-- Login Card -->
+    <div id="login-card" class="card p-6 max-w-md mx-auto hidden">
+      <h2 class="text-lg font-semibold mb-4">登入管理介面</h2>
+      <div class="space-y-3">
+        <div>
+          <label class="label">使用者名稱</label>
+          <input id="login-username" type="text" class="input" placeholder="USERNAME（與 Worker Secret 相同）" />
+        </div>
+        <div>
+          <label class="label">密碼</label>
+          <input id="login-password" type="password" class="input" placeholder="PASSWORD（與 Worker Secret 相同）" />
+        </div>
+        <div class="flex items-center justify-end gap-2 pt-2">
+          <button id="btn-login" class="btn btn-primary">登入</button>
+        </div>
+      </div>
+      <p class="text-xs text-gray-500 mt-4">系統僅將 <code>username:password</code> 的 base64 暫存於本機瀏覽器的 localStorage，用於每次請求的 Authorization Header（Basic Auth）。</p>
+    </div>
+
+    <!-- Filters -->
+    <div id="filters" class="card p-4 mb-4 hidden">
+      <div class="grid grid-cols-1 md:grid-cols-5 gap-3">
+        <div>
+          <label class="label">關鍵字</label>
+          <input id="f-q" type="text" class="input" placeholder="SKU / 名稱" />
+        </div>
+        <div>
+          <label class="label">品牌</label>
+          <input id="f-brand" type="text" class="input" placeholder="brand" />
+        </div>
+        <div>
+          <label class="label">分類</label>
+          <input id="f-category" type="text" class="input" placeholder="category" />
+        </div>
+        <div>
+          <label class="label">狀態</label>
+          <select id="f-status" class="input">
+            <option value="">（全部）</option>
+            <option value="active">active</option>
+            <option value="draft">draft</option>
+            <option value="archived">archived</option>
+          </select>
+        </div>
+        <div class="flex items-end">
+          <button id="btn-search" class="btn btn-primary w-full">搜尋</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- List -->
+    <div id="list-card" class="card overflow-hidden hidden">
+      <div class="px-4 py-3 border-b bg-gray-50 flex items-center justify-between">
+        <div class="text-sm text-gray-600">
+          <span>每頁</span>
+          <select id="page-size" class="border rounded-lg px-2 py-1 ml-1">
+            <option>20</option><option>50</option><option>100</option>
+          </select>
+          <span class="ml-2">筆</span>
+        </div>
+        <div class="text-sm text-gray-600">
+          API_BASE：<code id="api-base-label"></code>
+        </div>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="min-w-full table">
+          <thead class="bg-gray-50">
+            <tr>
+              <th>SKU</th>
+              <th>名稱</th>
+              <th>品牌/分類</th>
+              <th>售價</th>
+              <th>庫存</th>
+              <th>狀態</th>
+              <th>建立時間</th>
+              <th class="w-48">操作</th>
+            </tr>
+          </thead>
+          <tbody id="tbl-rows" class="divide-y"></tbody>
+        </table>
+      </div>
+      <div class="flex items-center justify-between px-4 py-3 border-t bg-gray-50">
+        <div id="page-info" class="text-sm text-gray-600">—</div>
+        <div class="flex items-center gap-2">
+          <button id="btn-prev" class="btn btn-gray">上一頁</button>
+          <button id="btn-next" class="btn btn-gray">下一頁</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Product Modal -->
+  <div id="modal-product" class="modal-mask hidden">
+    <div class="card w-[680px] max-w-[94vw] p-6">
+      <h3 id="modal-product-title" class="text-lg font-semibold mb-4">商品</h3>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="label">SKU *</label>
+          <input id="p-sku" class="input" />
+        </div>
+        <div>
+          <label class="label">名稱 *</label>
+          <input id="p-name" class="input" />
+        </div>
+        <div>
+          <label class="label">Slug</label>
+          <input id="p-slug" class="input" />
+        </div>
+        <div>
+          <label class="label">品牌</label>
+          <input id="p-brand" class="input" />
+        </div>
+        <div>
+          <label class="label">分類</label>
+          <input id="p-category" class="input" />
+        </div>
+        <div>
+          <label class="label">狀態</label>
+          <select id="p-status" class="input">
+            <option value="active">active</option>
+            <option value="draft">draft</option>
+            <option value="archived">archived</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">售價（以分計）</label>
+          <input id="p-price" type="number" class="input" placeholder="19900=NT$199" />
+        </div>
+        <div>
+          <label class="label">原價（以分計）</label>
+          <input id="p-compare" type="number" class="input" />
+        </div>
+        <div>
+          <label class="label">庫存</label>
+          <input id="p-stock" type="number" class="input" />
+        </div>
+        <div>
+          <label class="label">標籤（逗號分隔）</label>
+          <input id="p-tags" class="input" placeholder="dog,toy,soft" />
+        </div>
+        <div class="col-span-2">
+          <label class="label">短描述</label>
+          <textarea id="p-short" rows="2" class="input"></textarea>
+        </div>
+        <div class="col-span-2">
+          <label class="label">描述</label>
+          <textarea id="p-desc" rows="3" class="input"></textarea>
+        </div>
+        <div class="col-span-2">
+          <label class="label">規格（JSON）</label>
+          <textarea id="p-specs" rows="3" class="input" placeholder='{"material":"cotton"}'></textarea>
+        </div>
+      </div>
+      <div class="flex items-center justify-end gap-2 mt-5">
+        <button id="btn-product-cancel" class="btn btn-gray">取消</button>
+        <button id="btn-product-save" class="btn btn-primary">儲存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Images Modal -->
+  <div id="modal-images" class="modal-mask hidden">
+    <div class="card w-[860px] max-w-[96vw] p-6">
+      <div class="flex items-center justify-between">
+        <h3 class="text-lg font-semibold">圖片管理：<span id="img-sku" class="font-mono"></span></h3>
+        <button id="btn-images-close" class="btn btn-gray">關閉</button>
+      </div>
+      <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="md:col-span-2">
+          <div id="img-list" class="grid grid-cols-2 md:grid-cols-3 gap-3"></div>
+        </div>
+        <div class="card p-4">
+          <h4 class="font-semibold mb-2">上傳到 R2</h4>
+          <form id="form-upload" class="space-y-2">
+            <input type="file" id="file" class="block w-full text-sm" />
+            <input type="text" id="filename" class="input" placeholder="檔名（預設取檔案名）" />
+            <input type="number" id="sort" class="input" placeholder="排序（選填）" />
+            <input type="text" id="alt" class="input" placeholder="替代文字（選填）" />
+            <button class="btn btn-primary w-full" type="submit">上傳並建立紀錄</button>
+          </form>
+          <p class="text-xs text-gray-500 mt-2">
+            上傳會呼叫 <code>/api/upload/{sku}</code>，接著建立 <code>product_images</code> 紀錄。
+            公開圖片網址：<code>IMAGE_BASE/{sku}/{filename}</code>
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="fixed bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg text-sm bg-gray-900 text-white shadow-lg hidden"></div>
+
+  <script>
+    // ====== 基本設定 ======
+    const API_BASE = location.origin;                   // 與 Worker 綁到的網域一致（例如 https://image.wedo.pet）
+    const IMAGE_BASE = "https://image.wedo.pet";        // 公開圖床網域（你的 R2 Gateway 綁定網域）
+    const PAGE = { page: 1, size: 20 };
+
+    // ====== DOM 參照 ======
+    const loginCard = document.getElementById('login-card');
+    const filters = document.getElementById('filters');
+    const listCard = document.getElementById('list-card');
+    const apiBaseLabel = document.getElementById('api-base-label');
+
+    const fQ = document.getElementById('f-q');
+    const fBrand = document.getElementById('f-brand');
+    const fCategory = document.getElementById('f-category');
+    const fStatus = document.getElementById('f-status');
+    const pageSize = document.getElementById('page-size');
+    const btnSearch = document.getElementById('btn-search');
+
+    const tblRows = document.getElementById('tbl-rows');
+    const pageInfo = document.getElementById('page-info');
+    const btnPrev = document.getElementById('btn-prev');
+    const btnNext = document.getElementById('btn-next');
+
+    const btnNew = document.getElementById('btn-new');
+    const btnLogout = document.getElementById('btn-logout');
+
+    // Product modal
+    const modalProduct = document.getElementById('modal-product');
+    const mpTitle = document.getElementById('modal-product-title');
+    const pSKU = document.getElementById('p-sku');
+    const pName = document.getElementById('p-name');
+    const pSlug = document.getElementById('p-slug');
+    const pBrand = document.getElementById('p-brand');
+    const pCategory = document.getElementById('p-category');
+    const pStatus = document.getElementById('p-status');
+    const pPrice = document.getElementById('p-price');
+    const pCompare = document.getElementById('p-compare');
+    const pStock = document.getElementById('p-stock');
+    const pTags = document.getElementById('p-tags');
+    const pShort = document.getElementById('p-short');
+    const pDesc = document.getElementById('p-desc');
+    const pSpecs = document.getElementById('p-specs');
+    const btnProductCancel = document.getElementById('btn-product-cancel');
+    const btnProductSave = document.getElementById('btn-product-save');
+
+    // Images modal
+    const modalImages = document.getElementById('modal-images');
+    const imgSKU = document.getElementById('img-sku');
+    const imgList = document.getElementById('img-list');
+    const btnImagesClose = document.getElementById('btn-images-close');
+    const formUpload = document.getElementById('form-upload');
+    const upFile = document.getElementById('file');
+    const upFilename = document.getElementById('filename');
+    const upSort = document.getElementById('sort');
+    const upAlt = document.getElementById('alt');
+
+    const toast = document.getElementById('toast');
+
+    apiBaseLabel.textContent = API_BASE;
+
+    // ====== Auth ======
+    function getAuth() { return localStorage.getItem('pr_auth') || ''; }
+    function setAuth(user, pass) { localStorage.setItem('pr_auth', 'Basic ' + btoa(user + ':' + pass)); }
+    function clearAuth() { localStorage.removeItem('pr_auth'); }
+
+    function needLoginUI() {
+      loginCard.classList.remove('hidden');
+      filters.classList.add('hidden');
+      listCard.classList.add('hidden');
+    }
+    function showListUI() {
+      loginCard.classList.add('hidden');
+      filters.classList.remove('hidden');
+      listCard.classList.remove('hidden');
+    }
+
+    document.getElementById('btn-login').addEventListener('click', async () => {
+      const u = document.getElementById('login-username').value.trim();
+      const p = document.getElementById('login-password').value;
+      if (!u || !p) return toastMsg('請輸入使用者名稱與密碼');
+      setAuth(u, p);
+      // 試探呼叫受保護 API（用新增商品但不送資料改為呼叫 /admin 比較輕）
+      const ok = await testAuth();
+      if (ok) {
+        showListUI();
+        PAGE.page = 1;
+        await refreshList();
+      } else {
+        clearAuth();
+        toastMsg('登入失敗，請檢查帳密或 CORS/網域設定');
+      }
+    });
+
+    document.getElementById('btn-logout').addEventListener('click', () => {
+      clearAuth();
+      needLoginUI();
+    });
+
+    async function testAuth() {
+      try {
+        const res = await fetch(API_BASE + '/admin', { headers: { Authorization: getAuth() } });
+        return res.status !== 401;
+      } catch { return false; }
+    }
+
+    // ====== Fetch helper ======
+    async function api(path, options = {}, useAuth = false) {
+      const headers = { 'content-type': 'application/json' };
+      if (useAuth) headers['Authorization'] = getAuth();
+      const res = await fetch(API_BASE + path, { ...options, headers: { ...headers, ...(options.headers || {}) } });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json')) return await res.json();
+      return await res.text();
+    }
+
+    // ====== List & Search ======
+    btnSearch.addEventListener('click', () => { PAGE.page = 1; refreshList(); });
+    pageSize.addEventListener('change', () => { PAGE.size = parseInt(pageSize.value, 10) || 20; PAGE.page = 1; refreshList(); });
+    btnPrev.addEventListener('click', () => { if (PAGE.page > 1) { PAGE.page--; refreshList(); } });
+    btnNext.addEventListener('click', () => { PAGE.page++; refreshList(); });
+
+    async function refreshList() {
+      try {
+        const params = new URLSearchParams();
+        if (fQ.value.trim()) params.set('q', fQ.value.trim());
+        if (fBrand.value.trim()) params.set('brand', fBrand.value.trim());
+        if (fCategory.value.trim()) params.set('category', fCategory.value.trim());
+        if (fStatus.value) params.set('status', fStatus.value);
+        params.set('page', String(PAGE.page));
+        params.set('size', String(PAGE.size));
+
+        const data = await api('/api/products?' + params.toString(), { method: 'GET' });
+        renderList(data);
+      } catch (err) {
+        console.error(err);
+        toastMsg('載入清單失敗：' + err.message);
+      }
+    }
+
+    function renderList(data) {
+      const items = data.items || [];
+      tblRows.innerHTML = items.map(row => {
+        const statusBadge = row.status === 'active' ? 'badge badge-green' :
+                            row.status === 'draft' ? 'badge badge-amber' : 'badge badge-gray';
+        return `
+          <tr>
+            <td class="font-mono">${esc(row.sku)}</td>
+            <td>${esc(row.name || '')}<div class="text-xs text-gray-500">${esc(row.short_desc || '')}</div></td>
+            <td><div>${esc(row.brand || '-')}</div><div class="text-xs text-gray-500">${esc(row.category || '-')}</div></td>
+            <td>NT$ ${(Number(row.price||0)/100).toFixed(2)}</td>
+            <td>${Number(row.stock||0)}</td>
+            <td><span class="${statusBadge} px-2">${esc(row.status)}</span></td>
+            <td class="text-xs text-gray-500">${esc(row.created_at||'')}</td>
+            <td class="space-x-2">
+              <button class="btn btn-gray mb-1" onclick="openImages('${enc(row.sku)}')">圖片</button>
+              <button class="btn btn-primary mb-1" onclick="openEdit('${enc(row.sku)}')">編輯</button>
+              <button class="btn btn-danger mb-1" onclick="confirmDelete('${enc(row.sku)}')">刪除</button>
+            </td>
+          </tr>`;
+      }).join('');
+
+      const total = data.total || 0;
+      const start = total ? (data.page - 1) * data.size + 1 : 0;
+      const end = Math.min(total, data.page * data.size);
+      pageInfo.textContent = `第 ${data.page} 頁，顯示 ${start}-${end} / 共 ${total} 筆`;
+    }
+
+    // ====== Create / Edit ======
+    btnNew.addEventListener('click', () => openCreate());
+    btnProductCancel.addEventListener('click', closeProduct);
+
+    async function openCreate() {
+      mpTitle.textContent = '新增商品';
+      pSKU.value = ''; pSKU.disabled = false;
+      pName.value = ''; pSlug.value = ''; pBrand.value=''; pCategory.value='';
+      pStatus.value='active'; pPrice.value=''; pCompare.value=''; pStock.value='0';
+      pTags.value=''; pShort.value=''; pDesc.value=''; pSpecs.value='';
+      modalProduct.classList.remove('hidden');
+
+      btnProductSave.onclick = async () => {
+        try {
+          const payload = collectProductPayload(true);
+          await api('/api/products', { method: 'POST', body: JSON.stringify(payload) , headers: { Authorization: getAuth() } }, true);
+          toastMsg('新增成功');
+          closeProduct();
+          refreshList();
+        } catch (err) {
+          toastMsg('新增失敗：' + err.message);
+        }
+      };
+    }
+
+    async function openEdit(sku) {
+      try {
+        const data = await api('/api/products/' + encodeURIComponent(sku), { method: 'GET' });
+        const item = data.item;
+        mpTitle.textContent = '編輯商品：' + item.sku;
+        pSKU.value = item.sku; pSKU.disabled = true;
+        pName.value = item.name || '';
+        pSlug.value = item.slug || '';
+        pBrand.value = item.brand || '';
+        pCategory.value = item.category || '';
+        pStatus.value = item.status || 'active';
+        pPrice.value = item.price ?? '';
+        pCompare.value = item.compare_at_price ?? '';
+        pStock.value = item.stock ?? 0;
+        pTags.value = item.tags || '';
+        pShort.value = item.short_desc || '';
+        pDesc.value = item.description || '';
+        pSpecs.value = item.specs ? (typeof item.specs === 'string' ? item.specs : JSON.stringify(item.specs, null, 2)) : '';
+        modalProduct.classList.remove('hidden');
+
+        btnProductSave.onclick = async () => {
+          try {
+            const payload = collectProductPayload(false);
+            await api('/api/products/' + encodeURIComponent(item.sku), { method: 'PUT', body: JSON.stringify(payload), headers: { Authorization: getAuth() } }, true);
+            toastMsg('儲存成功');
+            closeProduct();
+            refreshList();
+          } catch (err) {
+            toastMsg('儲存失敗：' + err.message);
+          }
+        };
+      } catch (err) {
+        toastMsg('讀取商品失敗：' + err.message);
+      }
+    }
+
+    function collectProductPayload(isCreate) {
+      const payload = {
+        sku: pSKU.value.trim(),
+        name: pName.value.trim(),
+        slug: emptyToNull(pSlug.value),
+        brand: emptyToNull(pBrand.value),
+        category: emptyToNull(pCategory.value),
+        price: toInt(pPrice.value),
+        compare_at_price: pCompare.value === '' ? null : toInt(pCompare.value),
+        status: pStatus.value,
+        stock: toInt(pStock.value),
+        short_desc: emptyToNull(pShort.value),
+        description: emptyToNull(pDesc.value),
+        tags: emptyToNull(pTags.value),
+      };
+      const specsText = pSpecs.value.trim();
+      if (specsText) {
+        try { payload.specs = JSON.parse(specsText); }
+        catch { throw new Error('規格(JSON) 格式錯誤'); }
+      } else {
+        payload.specs = null;
+      }
+      if (isCreate && !payload.sku) throw new Error('SKU 必填');
+      if (isCreate && !payload.name) throw new Error('名稱 必填');
+      return payload;
+    }
+
+    function closeProduct() { modalProduct.classList.add('hidden'); }
+
+    async function confirmDelete(sku) {
+      if (!confirm(`確定刪除商品 ${sku}？此動作會一併刪除此 SKU 的圖片紀錄！`)) return;
+      try {
+        await api('/api/products/' + encodeURIComponent(sku), { method: 'DELETE', headers: { Authorization: getAuth() } }, true);
+        toastMsg('已刪除：' + sku);
+        refreshList();
+      } catch (err) {
+        toastMsg('刪除失敗：' + err.message);
+      }
+    }
+
+    // ====== Images ======
+    window.openImages = async function(sku) {
+      imgSKU.textContent = sku;
+      modalImages.classList.remove('hidden');
+      await loadImages(sku);
+    };
+    btnImagesClose.addEventListener('click', () => modalImages.classList.add('hidden'));
+
+    async function loadImages(sku) {
+      try {
+        const data = await api('/api/products/' + encodeURIComponent(sku) + '/images', { method: 'GET' });
+        const items = data.items || [];
+        imgList.innerHTML = items.map(r => {
+          const url = `${IMAGE_BASE}/${encodeURIComponent(r.sku)}/${encodeURIComponent(r.filename)}`;
+          return `
+          <div class="border rounded-lg overflow-hidden">
+            <div class="aspect-video bg-gray-100">
+              <img src="${url}" alt="${esc(r.alt||'')}" class="w-full h-full object-cover" loading="lazy" />
+            </div>
+            <div class="p-2 text-xs">
+              <div class="font-mono">${esc(r.filename)}</div>
+              <div class="text-gray-500">sort: ${Number(r.sort||0)}</div>
+              <div class="mt-2 flex items-center gap-2">
+                <a class="btn btn-gray text-xs" href="${url}" target="_blank" rel="noopener">開新視窗</a>
+                <button class="btn btn-danger text-xs" onclick="delImg('${enc(r.sku)}','${enc(r.filename)}')">刪除紀錄</button>
+              </div>
+            </div>
+          </div>`;
+        }).join('') || `<div class="text-sm text-gray-500">尚無圖片紀錄</div>`;
+      } catch (err) {
+        toastMsg('載入圖片失敗：' + err.message);
+      }
+    }
+
+    window.delImg = async function(sku, filename) {
+      if (!confirm(`刪除圖片紀錄：${filename}？（不會刪 R2 檔）`)) return;
+      try {
+        await api(`/api/products/${encodeURIComponent(sku)}/images/${encodeURIComponent(filename)}`, { method: 'DELETE', headers: { Authorization: getAuth() } }, true);
+        toastMsg('已刪除紀錄');
+        loadImages(sku);
+      } catch (err) {
+        toastMsg('刪除失敗：' + err.message);
+      }
+    };
+
+    formUpload.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const sku = imgSKU.textContent.trim();
+      const file = upFile.files[0];
+      if (!file) return toastMsg('請選擇檔案');
+      const filename = upFilename.value.trim() || file.name;
+      try {
+        // 1) 上傳到 R2
+        const fd = new FormData();
+        fd.append('file', file);
+        fd.append('filename', filename);
+        const res = await fetch(`${API_BASE}/api/upload/${encodeURIComponent(sku)}`, {
+          method: 'POST',
+          headers: { Authorization: getAuth() },
+          body: fd
+        });
+        if (!res.ok) throw new Error('上傳失敗 ' + res.status);
+        const up = await res.json();
+
+        // 2) 新增圖片紀錄
+        const body = {
+          filename: filename,
+          r2_key: `${sku}/${filename}`,
+          alt: upAlt.value.trim() || null,
+          sort: upSort.value ? Number(upSort.value) : 0
+        };
+        await api(`/api/products/${encodeURIComponent(sku)}/images`, {
+          method: 'POST',
+          headers: { Authorization: getAuth() },
+          body: JSON.stringify(body)
+        }, true);
+
+        toastMsg('上傳完成並建立紀錄');
+        upFile.value = ''; upFilename.value=''; upSort.value=''; upAlt.value='';
+        loadImages(sku);
+      } catch (err) {
+        toastMsg(err.message);
+      }
+    });
+
+    // ====== Helpers ======
+    function esc(s){ return String(s ?? '').replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])); }
+    function enc(s){ return encodeURIComponent(s); }
+    function toInt(n){ const v = Number(n); return Number.isFinite(v)? Math.trunc(v):0; }
+    function emptyToNull(v){ const s = (v??'').trim(); return s ? s : null; }
+    function toastMsg(msg){
+      toast.textContent = msg;
+      toast.classList.remove('hidden','opacity-0');
+      setTimeout(()=>toast.classList.add('hidden'), 2600);
+    }
+
+    // ====== 初始化 ======
+    (async function init(){
+      if (!getAuth()) {
+        needLoginUI();
+        return;
+      }
+      const ok = await testAuth();
+      if (!ok) { needLoginUI(); return; }
+      showListUI();
+      pageSize.value = PAGE.size;
+      refreshList();
+    })();
+
+    // 讓全域可用（for inline onclick）
+    window.openEdit = openEdit;
+    window.confirmDelete = confirmDelete;
+  </script>
+</body>
+</html>
