@@ -1,4 +1,5 @@
 /**
+ * ✅ 
  * * @param {object} env - Worker 
  */
 async function syncAirtable(env) {
@@ -9,24 +10,19 @@ async function syncAirtable(env) {
   let offset = null;
   const airtableUrl = new URL(`https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${env.AIRTABLE_TABLE_NAME}`);
   
-  // ✅ 修正：
-  // 
-  // airtableUrl.searchParams.set('view', 'Grid view'); 
   airtableUrl.searchParams.set('pageSize', 100);
+  // 
 
   try {
     // === 1. 
-    // Airtable API 
+    console.log("[syncAirtable] 開始抓取所有 Airtable 紀錄...");
     do {
       if (offset) {
         airtableUrl.searchParams.set('offset', offset);
       }
       
-      console.log(`[syncAirtable] 正在抓取 Airtable 頁面... (offset: ${offset})`);
       const res = await fetch(airtableUrl.href, {
-        headers: {
-          'Authorization': `Bearer ${env.AIRTABLE_API_TOKEN}`,
-        },
+        headers: { 'Authorization': `Bearer ${env.AIRTABLE_API_TOKEN}` },
       });
 
       if (!res.ok) {
@@ -37,10 +33,11 @@ async function syncAirtable(env) {
       const data = await res.json();
       allRecords.push(...data.records);
       offset = data.offset;
+      console.log(`[syncAirtable] 已抓取 ${allRecords.length} 筆...`);
 
     } while (offset);
     
-    console.log(`[syncAirtable] 已抓取總共 ${allRecords.length} 筆 Airtable 紀錄。`);
+    console.log(`[syncAirtable] Airtable 紀錄抓取完畢。總共 ${allRecords.length} 筆。`);
 
     if (allRecords.length === 0) {
       console.log("[syncAirtable] 沒有抓到任何資料，同步中止。");
@@ -48,109 +45,129 @@ async function syncAirtable(env) {
     }
 
     // === 2. 
-    const productStmts = [];
-    const imageStmts = [];
-
-    // 
     const productInsert = env.DATABASE.prepare(
       `INSERT OR REPLACE INTO products (sku, name, brand, status, raw_json) 
        VALUES (?, ?, ?, ?, ?)`
     );
-    
     const imageInsert = env.DATABASE.prepare(
       `INSERT OR REPLACE INTO product_images (sku, filename, url, width, height, variant) 
        VALUES (?, ?, ?, ?, ?, ?)`
     );
-    
-    // 
-    const skusInAirtable = new Set();
 
-    for (const record of allRecords) {
-      const fields = record.fields;
+    // === 3. ✅ 
+    const CHUNK_SIZE = 100; // 
+    let totalProductsUpserted = 0;
+    let totalImagesUpserted = 0;
+    let totalBatches = 0;
+
+    console.log(`[syncAirtable] 開始分批處理資料，每批 ${CHUNK_SIZE} 筆...`);
+
+    for (let i = 0; i < allRecords.length; i += CHUNK_SIZE) {
+      const chunk = allRecords.slice(i, i + CHUNK_SIZE);
+      totalBatches++;
+      console.log(`[syncAirtable] 正在處理第 ${totalBatches} 批 (紀錄 ${i+1} 到 ${i + chunk.length})...`);
       
-      // 
-      if (!fields['商品貨號']) {
-        console.warn(`[syncAirtable] 偵測到一筆紀錄缺少 '商品貨號'，已跳過: ${record.id}`);
+      const productStmts = [];
+      const imageStmts = [];
+      const skusInChunk = new Set();
+
+      for (const record of chunk) {
+        const fields = record.fields;
+        
+        if (!fields['商品貨號']) {
+          console.warn(`[syncAirtable] (批次 ${totalBatches}) 偵測到一筆紀錄缺少 '商品貨號'，已跳過: ${record.id}`);
+          continue;
+        }
+
+        const sku = String(fields['商品貨號']).trim();
+        skusInChunk.add(sku);
+
+        // 3a. 
+        productStmts.push(
+          productInsert.bind(
+            sku,
+            fields['產品名稱'] || null, 
+            fields['品牌名稱'] || null, 
+            fields['現貨商品'] || 'draft', 
+            JSON.stringify(fields)
+          )
+        );
+        
+        // 3b. 
+        if (fields['商品圖檔'] && Array.isArray(fields['商品圖檔'])) { 
+          let variantCounter = 1;
+          for (const img of fields['商品圖檔']) { 
+            if (img.url && img.filename) {
+              imageStmts.push(
+                imageInsert.bind(
+                  sku,
+                  img.filename,
+                  img.url,
+                  img.width || null,
+                  img.height || null,
+                  `v${variantCounter++}`
+                )
+              );
+            }
+          }
+        }
+      } // 
+
+      if (skusInChunk.size === 0) {
+        console.log(`[syncAirtable] (批次 ${totalBatches}) 此批次中沒有有效的 SKU，跳過 D1 寫入。`);
         continue;
       }
 
-      const sku = String(fields['商品貨號']).trim();
-      skusInAirtable.add(sku);
+      // 3c. 
+      const skuPlaceholders = Array.from(skusInChunk).map(() => '?').join(',');
+      const deleteOldImagesStmt = env.DATABASE.prepare(
+        `DELETE FROM product_images WHERE sku IN (${skuPlaceholders})`
+      ).bind(...skusInChunk);
 
-      // 2a. 
-      productStmts.push(
-        productInsert.bind(
-          sku,
-          fields['產品名稱'] || null, 
-          fields['品牌名稱'] || null, 
-          fields['現貨商品'] || 'draft', 
-          JSON.stringify(fields) // 
-        )
-      );
+      // 3d. 
+      const allStmts = [
+        deleteOldImagesStmt,
+        ...productStmts,
+        ...imageStmts
+      ];
+
+      console.log(`[syncAirtable] (批次 ${totalBatches}) 執行 D1 batch... (Delete: 1, Products: ${productStmts.length}, Images: ${imageStmts.length})`);
+      await env.DATABASE.batch(allStmts);
       
-      // 2b. 
-      if (fields['商品圖檔'] && Array.isArray(fields['商品圖檔'])) { 
-        let variantCounter = 1;
-        for (const img of fields['商品圖檔']) { 
-          if (img.url && img.filename) {
-            imageStmts.push(
-              imageInsert.bind(
-                sku,
-                img.filename,
-                img.url,
-                img.width || null,
-                img.height || null,
-                `v${variantCounter++}` // 
-              )
-            );
-          }
-        }
-      }
-    }
-    
-    // === 3. 
-    // 
-    // 
-    // 
-    
-    // 
-    const imageSkus = Array.from(skusInAirtable).map(sku => `?`).join(',');
-    const deleteOldImagesStmt = env.DATABASE.prepare(
-      `DELETE FROM product_images WHERE sku IN (${imageSkus})`
-    ).bind(...skusInAirtable);
+      totalProductsUpserted += productStmts.length;
+      totalImagesUpserted += imageStmts.length;
 
-    console.log(`[syncAirtable] 準備執行 D1 批次處理... (Products: ${productStmts.length}, Images: ${imageStmts.length}, DeleteStmts: 1)`);
+    } // 
 
-    // 
-    // 
-    const allStmts = [
-      deleteOldImagesStmt, // 
-      ...productStmts,     // 
-      ...imageStmts        // 
-    ];
-
-    const results = await env.DATABASE.batch(allStmts);
-    
+    // === 4. 
     const endTime = Date.now();
     const duration = (endTime - startTime) / 1000;
-
-    console.log(`[syncAirtable] D1 批次處理完成！`, results);
 
     const finalResult = {
       ok: true,
       message: "Airtable 同步 D1 成功！",
       recordsFetched: allRecords.length,
-      productsUpserted: productStmts.length,
-      imagesUpserted: imageStmts.length,
+      productsUpserted: totalProductsUpserted,
+      imagesUpserted: totalImagesUpserted,
+      totalBatches: totalBatches,
       duration_seconds: duration,
       timestamp: new Date().toISOString(),
     };
     
+    console.log(`[syncAirtable] D1 批次處理全部完成！`);
     console.log(JSON.stringify(finalResult));
     return finalResult;
 
   } catch (err) {
     console.error(`[syncAirtable] 同步過程中發生嚴重錯誤: ${err.message}`, err.stack);
+    // 
+    if (err.message.includes("too many SQL variables")) {
+       return {
+         ok: false,
+         message: `同步失敗: D1 SQL 變數過多。這通常是因為一次同步的資料量太大。 (錯誤: ${err.message})`,
+         timestamp: new Date().toISOString(),
+       };
+    }
     return {
       ok: false,
       message: `同步失敗: ${err.message}`,
