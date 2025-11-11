@@ -3,7 +3,6 @@ name = "pet-republic-api"
 main = "src/index.js"
 compatibility_date = "2024-10-01"
 workers_dev = true
-# ✅ 已更新為你的 ID
 account_id = "7f62a5bc86f62578367c93b8a1e0f131"
 
 # ========= Vars =========
@@ -16,6 +15,7 @@ binding = "R2_BUCKET"
 bucket_name = "my-images-bucket"
 
 # ========= D1（預設環境）=========
+# ✅ 
 [[d1_databases]]
 binding = "DATABASE"            # <— 之後 CLI 要用這個名稱
 database_name = "image-db"      # <— D1 的顯示名稱（不拿來跑 CLI）
@@ -27,7 +27,6 @@ crons = ["*/30 * * * *"]
 
 # ========= production 環境 =========
 [env.production]
-# ✅ 已更新為你的 ID
 account_id = "7f62a5bc86f62578367c93b8a1e0f131"
 
 [env.production.vars]
@@ -37,7 +36,15 @@ MAX_IMAGE_MB = "20"
 binding = "R2_BUCKET"
 bucket_name = "my-images-bucket"
 
-[[env.production.d1_databases]]
-binding = "DATABASE"
-database_name = "image-db"
-migrations_dir = "migrations"
+# ❗️ 
+# 
+# 
+# 我們已將此區塊刪除。
+# `production` 環境將會自動「繼承」上面根目錄的 D1 設定，
+# 這能解決 `d1 migrations apply` 指令的解析錯誤。
+#
+# [[env.production.d1_databases]]
+# binding = "DATABASE"
+# database_name = "image-db"
+# migrations_dir = "migrations"
+#
