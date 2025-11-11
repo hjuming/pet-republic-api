@@ -3,186 +3,40 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>寵兒共和國｜商品管理（Admin）</title>
+  <title>Pet Republic｜後台</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-50 text-gray-800">
-  <div class="mx-auto max-w-6xl p-4 sm:p-6 lg:p-8">
-    <header class="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-      <h1 class="text-2xl font-bold">商品管理</h1>
-      <div class="flex items-center gap-2">
-        <input id="user" placeholder="USERNAME" class="w-40 rounded-lg border border-gray-300 px-3 py-2"/>
-        <input id="pass" placeholder="PASSWORD" type="password" class="w-40 rounded-lg border border-gray-300 px-3 py-2"/>
-        <button id="saveAuth" class="rounded-lg bg-gray-800 px-3 py-2 text-white hover:bg-black">保存憑證</button>
-        <button id="btnSync" class="rounded-lg bg-teal-600 px-3 py-2 text-white hover:bg-teal-700">Airtable 同步</button>
-      </div>
-    </header>
-
-    <section class="mb-8 rounded-xl border bg-white p-4 shadow-sm">
-      <h2 class="mb-3 text-lg font-semibold">新增 / 更新商品（Upsert）</h2>
-      <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
-        <div class="space-y-2">
-          <label class="block text-sm">SKU <input id="sku" class="mt-1 w-full rounded border px-3 py-2"/></label>
-          <label class="block text-sm">商品名稱 <input id="name" class="mt-1 w-full rounded border px-3 py-2"/></label>
-          <label class="block text-sm">品牌 <input id="brand" class="mt-1 w-full rounded border px-3 py-2"/></label>
-          <label class="block text-sm">類別 <input id="category" class="mt-1 w-full rounded border px-3 py-2"/></label>
-          <label class="block text-sm">售價（NT$） <input id="price" type="number" class="mt-1 w-full rounded border px-3 py-2"/></label>
-        </div>
-        <div class="space-y-2">
-          <label class="block text-sm">狀態
-            <select id="status" class="mt-1 w-full rounded border px-3 py-2">
-              <option value="active">active</option>
-              <option value="draft">draft</option>
-              <option value="archived">archived</option>
-            </select>
-          </label>
-          <label class="block text-sm">庫存 <input id="stock" type="number" class="mt-1 w-full rounded border px-3 py-2"/></label>
-          <label class="block text-sm">短描述 <input id="short_desc" class="mt-1 w-full rounded border px-3 py-2"/></label>
-          <label class="block text-sm">詳細描述 <textarea id="description" rows="4" class="mt-1 w-full rounded border px-3 py-2"></textarea></label>
-        </div>
-      </div>
-      <div class="mt-3 flex gap-2">
-        <button id="btnSave" class="rounded-lg bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700">保存</button>
-        <button id="btnLoad" class="rounded-lg bg-gray-600 px-4 py-2 text-white hover:bg-gray-700">讀取現有資料</button>
-        <button id="btnDelete" class="rounded-lg bg-rose-600 px-4 py-2 text-white hover:bg-rose-700">刪除商品</button>
-      </div>
-    </section>
-
-    <section class="rounded-xl border bg-white p-4 shadow-sm">
-      <h2 class="mb-3 text-lg font-semibold">圖片管理</h2>
-      <div class="mb-3 flex items-end gap-3">
-        <label class="block text-sm">SKU <input id="imgSku" class="mt-1 w-48 rounded border px-3 py-2"/></label>
-        <button id="btnListImages" class="rounded-lg bg-gray-700 px-3 py-2 text-white hover:bg-black">列出圖片</button>
-      </div>
-      <div id="imgList" class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4"></div>
-    </section>
-
-    <pre id="log" class="mt-6 whitespace-pre-wrap rounded-xl border bg-white p-4 text-sm text-gray-700"></pre>
+<header class="sticky top-0 z-10 bg-white/90 backdrop-blur border-b">
+  <div class="max-w-5xl mx-auto px-4 py-4 flex items-center gap-3">
+    <h1 class="text-2xl font-extrabold">Pet Republic｜後台</h1>
+    <div class="flex-1"></div>
+    <a href="/" class="rounded-lg border px-4 py-2">回前台清單頁</a>
   </div>
-
+</header>
+<main class="max-w-5xl mx-auto px-4 py-6">
+  <section class="bg-white rounded-2xl shadow border p-6">
+    <h2 class="text-xl font-bold mb-2">Airtable 同步</h2>
+    <p class="text-gray-600 mb-4">按下即可觸發一次匯入（僅管理員可用）。</p>
+    <div class="flex items-center gap-3 mb-4">
+      <input id="u" class="border rounded-lg px-3 py-2" placeholder="USERNAME（只存於本機）">
+      <input id="p" type="password" class="border rounded-lg px-3 py-2" placeholder="PASSWORD（只存於本機）">
+      <button id="go" class="rounded-lg bg-indigo-600 text-white px-4 py-2">開始同步</button>
+    </div>
+    <pre id="out" class="bg-gray-900 text-white p-4 rounded-lg overflow-auto"></pre>
+  </section>
+</main>
 <script>
-(() => {
-  // === API 位址（可改成你的 workers 子網域）
-  const API_BASE = 'https://image.wedo.pet';
-
-  // === Auth header ===
-  const $ = s => document.querySelector(s);
-  const log = $('#log');
-  const auth = {
-    get user(){ return localStorage.getItem('pr_user') || ''; },
-    set user(v){ localStorage.setItem('pr_user', v||''); },
-    get pass(){ return localStorage.getItem('pr_pass') || ''; },
-    set pass(v){ localStorage.setItem('pr_pass', v||''); },
-    header(){
-      const u = this.user, p = this.pass;
-      if (!u || !p) return {};
-      return { 'Authorization': 'Basic ' + btoa(`${u}:${p}`) };
-    }
-  };
-
-  // 初始化
-  $('#user').value = auth.user;
-  $('#pass').value = auth.pass;
-
-  $('#saveAuth').addEventListener('click', () => {
-    auth.user = $('#user').value.trim();
-    auth.pass = $('#pass').value;
-    append('✅ 已保存憑證');
-  });
-
-  // Airtable 同步
-  $('#btnSync').addEventListener('click', async () => {
-    append('⏳ 觸發 Airtable 同步…');
-    const res = await fetch(`${API_BASE}/sync-airtable`, {
-      method: 'POST',
-      headers: { 'Content-Type':'application/json', ...auth.header() }
-    });
-    const data = await res.json().catch(()=>null);
-    append(JSON.stringify(data, null, 2));
-  });
-
-  // 保存（upsert）
-  $('#btnSave').addEventListener('click', async () => {
-    const sku = v('#sku'); const name = v('#name');
-    if (!sku || !name) return alert('SKU 與 商品名稱 必填');
-    const body = {
-      sku, name,
-      brand: v('#brand') || null,
-      category: v('#category') || null,
-      price: Math.round((Number(v('#price'))||0)*100),
-      status: v('#status') || 'active',
-      stock: Number(v('#stock'))||0,
-      short_desc: v('#short_desc') || null,
-      description: v('#description') || null,
-    };
-    const res = await fetch(`${API_BASE}/api/products`, {
-      method: 'POST',
-      headers: { 'Content-Type':'application/json', ...auth.header() },
-      body: JSON.stringify(body)
-    });
-    const data = await res.json().catch(()=>null);
-    append('保存結果：' + JSON.stringify(data));
-  });
-
-  // 讀取現有資料
-  $('#btnLoad').addEventListener('click', async () => {
-    const sku = v('#sku'); if (!sku) return alert('請先輸入 SKU');
-    const res = await fetch(`${API_BASE}/api/products/${encodeURIComponent(sku)}`, { headers: auth.header() });
-    const d = await res.json().catch(()=>null);
-    if (!d?.product) return append('找不到商品');
-    const p = d.product;
-    set('#name', p.name); set('#brand', p.brand); set('#category', p.category);
-    set('#price', (Number(p.price)||0)/100); set('#status', p.status); set('#stock', p.stock);
-    set('#short_desc', p.short_desc||''); set('#description', p.description||'');
-    append('已載入商品：' + sku);
-  });
-
-  // 刪除
-  $('#btnDelete').addEventListener('click', async () => {
-    const sku = v('#sku'); if (!sku) return alert('請先輸入 SKU');
-    if (!confirm(`確定刪除 ${sku} ?`)) return;
-    const res = await fetch(`${API_BASE}/api/products/${encodeURIComponent(sku)}`, {
-      method: 'DELETE',
-      headers: auth.header()
-    });
-    const d = await res.json().catch(()=>null);
-    append('刪除結果：' + JSON.stringify(d));
-  });
-
-  // 列出圖片
-  $('#btnListImages').addEventListener('click', async () => {
-    const sku = v('#imgSku'); if (!sku) return alert('請輸入 SKU');
-    const res = await fetch(`${API_BASE}/api/products/${encodeURIComponent(sku)}/images`, { headers: auth.header() });
-    const data = await res.json().catch(()=>null);
-    const box = $('#imgList'); box.innerHTML = '';
-    (data.items||[]).forEach(it => {
-      const url = `${API_BASE}${it.url}`;
-      const card = document.createElement('div');
-      card.className = 'rounded-xl border bg-white p-2';
-      card.innerHTML = `
-        <div class="aspect-square overflow-hidden rounded bg-gray-100">
-          <img src="${url}" class="h-full w-full object-contain"/>
-        </div>
-        <div class="mt-2 text-xs">${it.filename}</div>
-        <button class="mt-2 w-full rounded bg-rose-600 px-2 py-1 text-white text-sm hover:bg-rose-700">刪除</button>
-      `;
-      card.querySelector('button').addEventListener('click', async () => {
-        if (!confirm(`刪除 ${it.filename} ?`)) return;
-        const r = await fetch(`${API_BASE}/api/products/${encodeURIComponent(sku)}/images/${encodeURIComponent(it.filename)}`, {
-          method:'DELETE', headers: auth.header()
-        });
-        append('刪除圖片結果：' + await r.text());
-        card.remove();
-      });
-      box.appendChild(card);
-    });
-  });
-
-  // 工具
-  function v(sel){ return (document.querySelector(sel).value||'').trim(); }
-  function set(sel, val){ document.querySelector(sel).value = val ?? ''; }
-  function append(s){ log.textContent += (log.textContent?'\n':'') + s; log.scrollTop = log.scrollHeight; }
-})();
+const $ = (id)=>document.getElementById(id);
+const LS = { u:()=>localStorage.getItem("admin_u")||"", p:()=>localStorage.getItem("admin_p")||"", set(u,p){localStorage.setItem("admin_u",u);localStorage.setItem("admin_p",p);} };
+$("u").value = LS.u(); $("p").value = LS.p();
+$("go").onclick = async ()=>{
+  const u = $("u").value.trim(), p = $("p").value;
+  LS.set(u,p);
+  const res = await fetch("/sync-airtable",{ method:"POST", headers:{ "Authorization":"Basic "+btoa(u+":"+p) }});
+  const data = await res.json().catch(()=>({ok:false,error:"非 JSON"}));
+  $("out").textContent = JSON.stringify(data,null,2);
+};
 </script>
 </body>
 </html>
