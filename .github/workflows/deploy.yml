@@ -2,7 +2,7 @@ name: Deploy
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -11,7 +11,6 @@ concurrency:
 
 jobs:
   deploy:
-    name: deploy
     runs-on: ubuntu-24.04
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -32,7 +31,7 @@ jobs:
           node-version: 20
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci || npm install
 
       - name: Show wrangler.toml & whoami
         run: |
@@ -47,10 +46,11 @@ jobs:
         run: |
           set -euo pipefail
           put_secret() {
-            local NAME="$1"; local VALUE="${!1:-}"
+            local NAME="$1"
+            local VALUE="${!1:-}"
             if [ -n "${VALUE}" ]; then
               echo "Uploading secret ${NAME}..."
-              echo -n "${VALUE}" | npx wrangler secret put "${NAME}" --env production --config wrangler.toml
+              printf "%s" "${VALUE}" | npx wrangler secret put "${NAME}" --env production --config wrangler.toml
             else
               echo "Skipping ${NAME} (not set)"
             fi
@@ -61,10 +61,8 @@ jobs:
           put_secret USERNAME
           put_secret PASSWORD
 
-      - name: Locate D1 (sanity check)
-        shell: bash
+      - name: D1 sanity check
         run: |
-          set -euo pipefail
           npx wrangler d1 list --env production --config wrangler.toml
           npx wrangler d1 execute image-db \
             --command "SELECT 'ok' AS ping;" \
@@ -72,12 +70,10 @@ jobs:
             --env production \
             --config wrangler.toml
 
-      - name: Apply D1 migrations (binding: DATABASE)
-        if: "${{ hashFiles('migrations/**') != '' }}"
-        shell: bash
+      - name: Apply D1 migrations (binding=DATABASE)
+        if: ${{ hashFiles('migrations/**') != '' }}
         run: |
-          set -euo pipefail
-          echo "Found migrations dir:"
+          echo "Migrations found:"
           ls -1 migrations
           npx wrangler d1 migrations apply DATABASE \
             --remote \
@@ -87,6 +83,6 @@ jobs:
       - name: Deploy Worker
         run: npx wrangler deploy --env production --config wrangler.toml
 
-      - name: Post Setup Node.js
+      - name: Node version (post)
         if: always()
         run: node -v
