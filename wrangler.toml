@@ -1,28 +1,26 @@
+# ========== Worker 基本設定 ==========
 name = "pet-republic-api"
 main = "src/index.js"
 compatibility_date = "2024-10-01"
 workers_dev = true
 
-# 若要定時任務可保留，沒用就移除
-# [triggers]
-# crons = ["*/10 * * * *"]
-
-# === D1 綁定 ===
-[[d1_databases]]
-binding = "DATABASE"
-database_name = "image-db"
-# ⚠️ 填入你剛剛確認到的 D1 Database ID
-database_id = "243fe99c-70d9-4d4d-89e7-d3dd3b58dadf"
-
-# === R2 綁定 ===
+# ========== R2 連線 ==========
 [[r2_buckets]]
 binding = "R2_BUCKET"
 bucket_name = "my-images-bucket"
 
-[vars]
-MAX_IMAGE_MB = "20"     # 後台限制上傳大小（MB）
+# ========== D1 連線 ==========
+[[d1_databases]]
+binding = "DATABASE"
+database_name = "image-db"
+# database_id 會在部署時自動填入
 
-# === （可選）把網域路由寫進程式碼，或維持你目前儀表板綁定亦可 ===
-# [[routes]]
-# pattern = "image.wedo.pet/*"
-# zone_name = "wedo.pet"
+# ========== 一般變數 ==========
+[vars]
+# 上傳圖片大小上限（MB）
+MAX_IMAGE_MB = "20"
+
+# ========== 定時觸發（自動同步 Airtable） ==========
+[triggers]
+# 每 30 分鐘同步一次（可改成 */10 * * * * 代表每 10 分鐘）
+crons = ["*/30 * * * *"]
