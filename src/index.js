@@ -227,7 +227,8 @@ function renderCatalogHTML(origin) {
           const t = document.getElementById("card-tpl").content.cloneNode(true);
           const card = t.querySelector("label");
           const cb = t.querySelector(".select");
-          const img = t.querySelector("img"); img.src = cover || "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'/>"; img.alt = p.name||p.sku;
+          const img = t.querySelector("img"); img.src = cover || "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'/>";
+          img.alt = p.name||p.sku;
           t.querySelector(".name").textContent = p.name||"";
           t.querySelector(".sku").textContent = p.sku;
           t.querySelector(".brand").textContent = p.brand||"-";
@@ -261,7 +262,7 @@ function renderCatalogHTML(origin) {
         rows.push(cols.map(k=>{
           let v = p[k] ?? "";
           if(k==="price") v = (v/100)||0;
-          return \`\${(\\""+v).replace(/[\\\\n\\\\r,]/g," ")}\`;
+          return (\\""+v).replace(/[\\n\\r,]/g," ");
         }).join(","));
       }
       const blob = new Blob([rows.join("\\n")], {type:"text/csv;charset=utf-8"});
@@ -367,7 +368,7 @@ export default {
       return renderAdminHTML(origin);
     }
 
-    /* ---- 2) Public image passthrough: /{sku}/{filename} -> R2 object ---- */
+    /* ---- 2) Public image passthrough: /{sku}/{filename} ---- */
     const parts = pathname.split("/").filter(Boolean);
     if (request.method === "GET" && parts.length === 2) {
       const [sku, filename] = parts;
@@ -399,14 +400,16 @@ export default {
       if (brand) {
         const arr = brand.split(",").map((v) => v.trim()).filter(Boolean);
         if (arr.length) {
-          where.push(\`(\${arr.map(()=> "brand = ?").join(" OR ")})\`);
+          // ⬇️ 改用字串相加，避免 backtick 被誤判
+          where.push("(" + arr.map(() => "brand = ?").join(" OR ") + ")");
           params.push(...arr);
         }
       }
       if (category) {
         const arr = category.split(",").map((v) => v.trim()).filter(Boolean);
         if (arr.length) {
-          where.push(\`(\${arr.map(()=> "category = ?").join(" OR ")})\`);
+          // ⬇️ 改用字串相加，避免 backtick 被誤判
+          where.push("(" + arr.map(() => "category = ?").join(" OR ") + ")");
           params.push(...arr);
         }
       }
@@ -415,17 +418,17 @@ export default {
         params.push(status);
       }
 
-      const whereSql = where.length ? \`WHERE \${where.join(" AND ")}\` : "";
+      const whereSql = where.length ? "WHERE " + where.join(" AND ") : "";
       const offset = (page - 1) * size;
 
-      const totalRow = await env.DATABASE.prepare(\`SELECT COUNT(*) as c FROM products \${whereSql}\`).bind(...params).first();
+      const totalRow = await env.DATABASE.prepare(`SELECT COUNT(*) as c FROM products ${whereSql}`).bind(...params).first();
       const total = totalRow?.c ?? 0;
 
       const rows = await env.DATABASE.prepare(
-        \`SELECT id, sku, name, brand, category, price, status
-           FROM products \${whereSql}
+        `SELECT id, sku, name, brand, category, price, status
+           FROM products ${whereSql}
            ORDER BY updated_at DESC
-           LIMIT ? OFFSET ?\`
+           LIMIT ? OFFSET ?`
       ).bind(...params, size, offset).all();
 
       // images for listed skus
@@ -434,8 +437,8 @@ export default {
       if (skus.length) {
         const placeholders = skus.map(() => "?").join(",");
         const picRows = await env.DATABASE.prepare(
-          \`SELECT sku, filename, r2_key, alt, sort FROM product_images
-            WHERE sku IN (\${placeholders}) ORDER BY sort ASC, id ASC\`
+          `SELECT sku, filename, r2_key, alt, sort FROM product_images
+            WHERE sku IN (${placeholders}) ORDER BY sort ASC, id ASC`
         ).bind(...skus).all();
         imagesBySku = (picRows.results || []).reduce((acc, r) => {
           (acc[r.sku] ||= []).push(r);
@@ -486,10 +489,8 @@ export default {
       if (!requireBasicAuth(request, env)) return needAuth();
     }
 
-    // POST /sync-airtable
+    // POST /sync-airtable  (placeholder)
     if (request.method === "POST" && pathname === "/sync-airtable") {
-      // NOTE: 此處僅回覆啟動訊息；實際同步程式你已在先前版本加入。
-      // 這裡簡化為 queue 任務 / 或直接返回提示。
       return j({
         ok: true,
         message:
@@ -529,13 +530,13 @@ export default {
       const params = [];
       for (const k of fields) {
         if (k in body) {
-          sets.push(\`\${k} = ?\`);
+          sets.push(`${k} = ?`);
           params.push(k==="specs" && body[k]!=null ? JSON.stringify(body[k]) : body[k]);
         }
       }
       if (!sets.length) return j({ ok:false, error:"no fields" }, 400);
       params.push(sku);
-      await env.DATABASE.prepare(\`UPDATE products SET \${sets.join(", ")} WHERE sku = ?\`).bind(...params).run();
+      await env.DATABASE.prepare(`UPDATE products SET ${sets.join(", ")} WHERE sku = ?`).bind(...params).run();
       return j({ ok:true, sku });
     }
 
