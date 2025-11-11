@@ -4,23 +4,34 @@ main = "src/index.js"
 compatibility_date = "2024-10-01"
 workers_dev = true
 
-# ========= R2 =========
-[[r2_buckets]]
-binding = "R2_BUCKET"
-bucket_name = "my-images-bucket"
-
-# ========= D1 =========
-[[d1_databases]]
-# 供程式碼使用與 workflow migrations 的 binding 名稱
-binding = "DATABASE"
-# 這裡改成你在 Cloudflare D1 主控台看到的資料庫「名稱」
-database_name = "image-db"
-# database_id 會在 deploy 時自動帶入
-
 # ========= Vars =========
 [vars]
 MAX_IMAGE_MB = "20"
 
-# ========= Cron（Airtable 同步排程，可保留）=========
+# ========= R2 (default env) =========
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "my-images-bucket"
+
+# ========= D1 (default env) =========
+[[d1_databases]]
+# 給程式與 CI 使用的綁定名稱（固定用 DATABASE）
+binding = "DATABASE"
+# 這是你在 Cloudflare D1 主控台看到的資料庫【名稱】
+database_name = "image-db"
+# database_id 由 wrangler 自動帶入
+
+# ========= Cron（可保留/調整）=========
 [triggers]
 crons = ["*/30 * * * *"]
+
+# ========= production 環境（保險起見重複宣告相同綁定）=========
+[env.production]
+
+[[env.production.r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "my-images-bucket"
+
+[[env.production.d1_databases]]
+binding = "DATABASE"
+database_name = "image-db"
