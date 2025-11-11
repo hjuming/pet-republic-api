@@ -4,11 +4,12 @@ main = "src/index.js"
 compatibility_date = "2024-10-01"
 workers_dev = true
 
-# 你帳號 ID（保險起見明寫，避免 wrangler 在 CI 上解析落空）
+# 明寫帳號 ID，避免 CI 上解析落空
 account_id = "d7700d5b696e5584f6c1fcc028b6e803"
 
 # ========= Vars =========
 [vars]
+# 會在 default 環境生效；注意：不會自動繼承到 env.production
 MAX_IMAGE_MB = "20"
 
 # ========= R2（預設環境）=========
@@ -18,14 +19,13 @@ bucket_name = "my-images-bucket"
 
 # ========= D1（預設環境）=========
 [[d1_databases]]
-# 程式碼使用的綁定名稱
+# 程式碼中使用的綁定名稱（請保持 DATABASE）
 binding = "DATABASE"
 # D1 儀表板上的「名稱」
 database_name = "image-db"
-# D1 儀表板上的「資料庫 ID（UUID）」——請改成你的
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_UUID"
-# 指定遷移檔目錄（確保 wrangler 能找到）
+# 遷移檔目錄（確保 wrangler 能找到）
 migrations_dir = "migrations"
+# ⚠️ 嚴禁在方案 A 寫 database_id！讓 wrangler 用名稱自動解析
 
 # ========= Cron（選填）=========
 [triggers]
@@ -33,8 +33,12 @@ crons = ["*/30 * * * *"]
 
 # ========= production 環境 =========
 [env.production]
-# 明寫 account_id（與上方一致，避免 CI 情境解析落空）
+# 再明寫 account_id（與上方一致，避免 CI 情境解析落空）
 account_id = "d7700d5b696e5584f6c1fcc028b6e803"
+
+# production 不會自動繼承上層 vars，請補上需要的變數
+[env.production.vars]
+MAX_IMAGE_MB = "20"
 
 [[env.production.r2_buckets]]
 binding = "R2_BUCKET"
@@ -43,5 +47,5 @@ bucket_name = "my-images-bucket"
 [[env.production.d1_databases]]
 binding = "DATABASE"
 database_name = "image-db"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_UUID"
 migrations_dir = "migrations"
+# ⚠️ 同樣不要寫 database_id
