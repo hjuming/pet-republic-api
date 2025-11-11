@@ -1,56 +1,46 @@
--- ================================================
--- 🐾 寵兒共和國 D1 資料庫初始化腳本
--- File: migrations/0001_init.sql
--- 目的：建立產品主表與基本索引
--- ================================================
-
--- ===============================
--- 🧱 Table: products
--- ===============================
+-- 產品主表
 CREATE TABLE IF NOT EXISTS products (
-  sku TEXT PRIMARY KEY,                -- 產品 SKU（唯一識別碼）
-  title TEXT,                          -- 中文名稱
-  title_en TEXT,                       -- 英文名稱
-  brand TEXT,                          -- 品牌名稱
-  category TEXT,                       -- 類別名稱
-  description TEXT,                    -- 商品描述
-  materials TEXT,                      -- 材質說明
-  image_file TEXT,                     -- 上傳後檔名 (對應 R2 內路徑)
-  airtable_image_url TEXT,             -- 來源 Airtable 圖片 URL
-  case_pack_size TEXT,                 -- 包裝規格
-  msrp TEXT,                           -- 建議售價
-  barcode TEXT,                        -- 條碼
-  dimensions_cm TEXT,                  -- 尺寸 (公分)
-  weight_g TEXT,                       -- 重量 (公克)
-  origin TEXT,                         -- 產地
-  in_stock INTEGER DEFAULT 1,          -- 是否有庫存 (1=有, 0=無)
-  image_synced TEXT DEFAULT 'N',       -- 圖片同步狀態 ('N'=未抓取, 'T'=成功, 'F'=失敗)
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- ===============================
--- ⚡️ Indexes
--- ===============================
-CREATE INDEX IF NOT EXISTS idx_products_synced 
-  ON products (image_synced);
-
-CREATE INDEX IF NOT EXISTS idx_products_airtable_url 
-  ON products (airtable_image_url);
-
-CREATE INDEX IF NOT EXISTS idx_products_brand 
-  ON products (brand);
-
-CREATE INDEX IF NOT EXISTS idx_products_category 
-  ON products (category);
-
--- ===============================
--- ✅ 初始化紀錄表（可選，用於版本控制）
--- ===============================
-CREATE TABLE IF NOT EXISTS migrations_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  filename TEXT,
-  executed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  sku TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  slug TEXT UNIQUE,
+  brand TEXT,
+  category TEXT,
+  price INTEGER NOT NULL DEFAULT 0,           -- 以「整數分」儲存：NT$199 -> 19900
+  compare_at_price INTEGER,                   -- 原價（選填）
+  status TEXT NOT NULL DEFAULT 'active',      -- active | draft | archived
+  stock INTEGER NOT NULL DEFAULT 0,
+  short_desc TEXT,
+  description TEXT,
+  specs JSON,                                 -- 規格（JSON）
+  tags TEXT,                                  -- 以逗號分隔或 JSON 皆可
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
-INSERT INTO migrations_log (filename)
-VALUES ('0001_init.sql');
+CREATE INDEX IF NOT EXISTS idx_products_sku ON products (sku);
+CREATE INDEX IF NOT EXISTS idx_products_status ON products (status);
+CREATE INDEX IF NOT EXISTS idx_products_brand ON products (brand);
+CREATE INDEX IF NOT EXISTS idx_products_category ON products (category);
+
+-- 圖片表
+CREATE TABLE IF NOT EXISTS product_images (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sku TEXT NOT NULL,
+  filename TEXT NOT NULL,                     -- 例：main.jpg / 1.webp
+  r2_key TEXT NOT NULL,                       -- 例：{sku}/{filename}
+  alt TEXT,
+  sort INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE(sku, filename)
+);
+
+CREATE INDEX IF NOT EXISTS idx_images_sku ON product_images (sku);
+
+-- 更新觸發器
+CREATE TRIGGER IF NOT EXISTS trg_products_updated_at
+AFTER UPDATE ON products
+FOR EACH ROW
+BEGIN
+  UPDATE products SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = OLD.id;
+END;
