@@ -31,7 +31,7 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install deps
+      - name: Install dependencies
         run: npm install
 
       - name: Show wrangler.toml & whoami
@@ -42,7 +42,6 @@ jobs:
           npx wrangler --version
           npx wrangler whoami || true
 
-      # 將 Secrets 寫回 Worker（避免「被洗掉」）
       - name: Upload Worker secrets
         shell: bash
         run: |
@@ -63,12 +62,10 @@ jobs:
           put_secret PASSWORD
 
       - name: Locate D1 (sanity check)
-        id: d1
         shell: bash
         run: |
           set -euo pipefail
           npx wrangler d1 list --env production --config wrangler.toml
-          # Ping DB（remote）
           npx wrangler d1 execute image-db \
             --command "SELECT 'ok' AS ping;" \
             --remote \
@@ -76,21 +73,19 @@ jobs:
             --config wrangler.toml
 
       - name: Apply D1 migrations (binding: DATABASE)
-        if: ${{ hashFiles('migrations/**') != '' }}
+        if: "${{ hashFiles('migrations/**') != '' }}"
         shell: bash
         run: |
           set -euo pipefail
           echo "Found migrations dir:"
           ls -1 migrations
-          # ⚠️ 必須用 binding 名稱（DATABASE），不可用 database_name（image-db）
           npx wrangler d1 migrations apply DATABASE \
             --remote \
             --env production \
             --config wrangler.toml
 
       - name: Deploy Worker
-        run: |
-          npx wrangler deploy --env production --config wrangler.toml
+        run: npx wrangler deploy --env production --config wrangler.toml
 
       - name: Post Setup Node.js
         if: always()
