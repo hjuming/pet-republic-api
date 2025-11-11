@@ -1,70 +1,77 @@
-# ===============================
-# 🐾 寵兒共和國 API（Pet Republic API）
-# Cloudflare Workers 部署設定
-# ===============================
+name: Deploy
 
-name = "pet-republic-api"
-main = "src/index.js"
-compatibility_date = "2024-10-01"
-workers_dev = true
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
 
-# ===============================
-# 🌐 路由設定
-# ===============================
-# 若使用 Cloudflare 儀表板手動綁定自訂網域，可保留註解；
-# 若想改由 toml 控制，可解除註解並確認 pattern。
-# routes = [
-#   { pattern = "image.wedo.pet/*", zone_name = "wedo.pet" }
-# ]
+# 避免併發部署踩到彼此
+concurrency:
+  group: pet-republic-api-deploy
+  cancel-in-progress: true
 
-# ===============================
-# ⏰ Cron 定時觸發（每 10 分鐘）
-# ===============================
-[triggers]
-crons = ["*/10 * * * *"]
+permissions:
+  contents: read
 
-# ===============================
-# 🗄️ D1 資料庫綁定
-# ===============================
-[[d1_databases]]
-binding = "DATABASE"                        # 在程式內用 env.DATABASE 呼叫
-database_name = "image-db"                  # D1 資料庫名稱
-database_id = "243fe99c-70d9-4d4d-89e7-d3dd3b58dadf"  # ✅ 你的 D1 ID
+env:
+  # Cloudflare 帳號與 API Token 來自 GitHub Secrets
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
-# ===============================
-# ☁️ R2 儲存桶綁定
-# ===============================
-[[r2_buckets]]
-binding = "R2_BUCKET"                       # 在程式內用 env.R2_BUCKET 呼叫
-bucket_name = "my-images-bucket"            # R2 儲存桶名稱
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
 
-# ===============================
-# ⚙️ 非機密環境變數（安全可公開）
-# ===============================
-[vars]
-# 最大允許圖片大小 (MB)
-MAX_IMAGE_MB = "20"
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
 
-# CORS 允許來源（用於圖片與 API）
-CORS_ALLOW_ORIGIN = "https://image.wedo.pet"
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
 
-# ===============================
-# 🔒 機密值（由 GitHub Actions 自動設定）
-# ===============================
-# 以下變數在 wrangler.toml 不需填值，會由 workflow 自動 wrangler secret put：
-#   AIRTABLE_API_TOKEN
-#   AIRTABLE_BASE_ID
-#   AIRTABLE_TABLE_NAME
-#   USERNAME
-#   PASSWORD
-#   DOMAIN
+      - name: 📦 Install dependencies
+        run: npm ci
 
-# ===============================
-# 🚀 部署與開發注意事項
-# ===============================
-# - 開發測試可用 `wrangler dev` 在本地啟動模擬。
-# - 正式部署請使用 GitHub Actions（deploy.yml）。
-# - 需確保 CLOUDFLARE_API_TOKEN 具備以下權限：
-#     * Workers Scripts:Edit, Workers KV Storage:Edit,
-#       Workers R2 Storage:Edit, D1:Edit
-# - 若更換帳號或 R2/D1 名稱，務必同步更新此檔案。
+      - name: 🚀 Wrangler deploy
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ env.CLOUDFLARE_API_TOKEN }}
+
+      # 將以下 Secrets（如有提供）寫入 Cloudflare Worker。
+      # 這些名稱要與程式內使用的 env.* 相同。
+      - name: 🔐 Upload Worker secrets (if provided)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          put_secret () {
+            local NAME="$1"
+            local VALUE="$2"
+            if [ -n "${VALUE}" ]; then
+              echo "• putting secret: ${NAME}"
+              # 以 stdin 方式寫入，重覆執行也安全
+              printf '%s' "${VALUE}" | npx wrangler secret put "${NAME}" --quiet
+            else
+              echo "• skip ${NAME} (not provided)"
+            fi
+          }
+
+          put_secret "AIRTABLE_API_TOKEN"   "${{ secrets.AIRTABLE_API_TOKEN }}"
+          put_secret "AIRTABLE_BASE_ID"     "${{ secrets.AIRTABLE_BASE_ID }}"
+          put_secret "AIRTABLE_TABLE_NAME"  "${{ secrets.AIRTABLE_TABLE_NAME }}"
+          put_secret "USERNAME"             "${{ secrets.BASIC_AUTH_USERNAME || secrets.USERNAME }}"
+          put_secret "PASSWORD"             "${{ secrets.BASIC_AUTH_PASSWORD || secrets.PASSWORD }}"
+          put_secret "DOMAIN"               "${{ secrets.DOMAIN }}"
+
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ env.CLOUDFLARE_API_TOKEN }}
+
+      - name: ✅ Summary
+        run: |
+          echo "Deployed to workers.dev (and your custom domain if routed in dashboard)."
+          echo "Worker: pet-republic-api"
