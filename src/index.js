@@ -1,5 +1,4 @@
 /**
- * ✅ 
  * * @param {object} env - Worker 
  */
 async function syncAirtable(env) {
@@ -10,8 +9,9 @@ async function syncAirtable(env) {
   let offset = null;
   const airtableUrl = new URL(`https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${env.AIRTABLE_TABLE_NAME}`);
   
+  // ✅ 修正：
   // 
-  airtableUrl.searchParams.set('view', 'Grid view'); // 
+  // airtableUrl.searchParams.set('view', 'Grid view'); 
   airtableUrl.searchParams.set('pageSize', 100);
 
   try {
@@ -68,7 +68,7 @@ async function syncAirtable(env) {
     for (const record of allRecords) {
       const fields = record.fields;
       
-      // ✅ 
+      // 
       if (!fields['商品貨號']) {
         console.warn(`[syncAirtable] 偵測到一筆紀錄缺少 '商品貨號'，已跳過: ${record.id}`);
         continue;
@@ -81,17 +81,17 @@ async function syncAirtable(env) {
       productStmts.push(
         productInsert.bind(
           sku,
-          fields['產品名稱'] || null, // ✅ 
-          fields['品牌名稱'] || null, // ✅ 
-          fields['現貨商品'] || 'draft', // ✅ 
+          fields['產品名稱'] || null, 
+          fields['品牌名稱'] || null, 
+          fields['現貨商品'] || 'draft', 
           JSON.stringify(fields) // 
         )
       );
       
       // 2b. 
-      if (fields['商品圖檔'] && Array.isArray(fields['商品圖檔'])) { // ✅ 
+      if (fields['商品圖檔'] && Array.isArray(fields['商品圖檔'])) { 
         let variantCounter = 1;
-        for (const img of fields['商品圖檔']) { // ✅ 
+        for (const img of fields['商品圖檔']) { 
           if (img.url && img.filename) {
             imageStmts.push(
               imageInsert.bind(
