@@ -15,10 +15,10 @@ binding = "R2_BUCKET"
 bucket_name = "my-images-bucket"
 
 # ========= D1（預設環境）=========
-# ✅ 
+# 
 [[d1_databases]]
-binding = "DATABASE"            # <— 之後 CLI 要用這個名稱
-database_name = "image-db"      # <— D1 的顯示名稱（不拿來跑 CLI）
+binding = "DATABASE"            # <— 
+database_name = "image-db"      # <— 
 migrations_dir = "migrations"
 
 # ========= Cron（選填）=========
@@ -36,15 +36,10 @@ MAX_IMAGE_MB = "20"
 binding = "R2_BUCKET"
 bucket_name = "my-images-bucket"
 
-# ❗️ 
-# 
-# 
-# 我們已將此區塊刪除。
-# `production` 環境將會自動「繼承」上面根目錄的 D1 設定，
-# 這能解決 `d1 migrations apply` 指令的解析錯誤。
-#
-# [[env.production.d1_databases]]
-# binding = "DATABASE"
-# database_name = "image-db"
-# migrations_dir = "migrations"
-#
+# ✅ 修正：
+# 根據最新的錯誤日誌 (WARNING)，
+# 我們必須在 `env.production` 區塊內也明確定義 D1 資料庫。
+[[env.production.d1_databases]]
+binding = "DATABASE"
+database_name = "image-db"
+migrations_dir = "migrations"
