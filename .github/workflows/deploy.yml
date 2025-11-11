@@ -70,18 +70,24 @@ jobs:
             --env production \
             --config wrangler.toml
 
-      - name: Apply D1 migrations (database_name=image-db)
+      # ✅ 修正：繞過 Wrangler Bug
+      # 
+      # 
+      # 
+      # 
+      - name: Apply D1 migrations (WORKAROUND)
         if: ${{ hashFiles('migrations/**') != '' }}
         run: |
           echo "Migrations found:"
           ls -1 migrations
-          # ✅ 修正：
-          # 移除了 --config wrangler.toml 參數，
-          # 因為它似乎與 d1 migrations apply 指令衝突。
-          # npx 會自動尋找 wrangler.toml。
-          npx wrangler d1 migrations apply image-db \
+          
+          # 我們使用 d1 execute (已知可運作) 來手動套用 .sql 檔案，
+          # 
+          # 
+          npx wrangler d1 execute image-db \
             --remote \
-            --env production
+            --env production \
+            --file=./migrations/0001_init.sql
 
       - name: Deploy Worker
         run: npx wrangler deploy --env production --config wrangler.toml
