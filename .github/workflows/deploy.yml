@@ -32,26 +32,26 @@ jobs:
           npx wrangler --version
           npx wrangler whoami || true
 
-      # ✅ 這步會用 wrangler.toml 的 binding 名稱「DATABASE」
-      - name: Apply D1 migrations (remote)
+      # ✅ 用「資料庫名稱」執行遷移，並指定 production 環境
+      - name: Apply D1 migrations (remote, production env)
         shell: bash
         run: |
           if [ -d "migrations" ]; then
-            echo "🔧 Applying D1 migrations to binding: DATABASE ..."
-            npx wrangler d1 migrations apply DATABASE --remote --config wrangler.toml
+            echo "🔧 Applying D1 migrations to DB: image-db (env: production) ..."
+            npx wrangler d1 migrations apply image-db --remote --env production --config wrangler.toml
           else
             echo "⚠️ No migrations folder found. Skipping."
           fi
 
-      - name: Deploy Worker (default env)
-        run: npx wrangler deploy --config wrangler.toml
+      - name: Deploy Worker (production env)
+        run: npx wrangler deploy --env production --config wrangler.toml
 
       # （選用）把密鑰寫回 Worker，避免被覆蓋時遺失
       - name: Upload secrets to Worker
         shell: bash
         run: |
           set -euo pipefail
-          put_secret () { local NAME="$1"; local VALUE="$2"; if [ -n "$VALUE" ]; then echo "$VALUE" | npx wrangler secret put "$NAME" --config wrangler.toml; else echo "Skip $NAME (empty)"; fi; }
+          put_secret () { local NAME="$1"; local VALUE="$2"; if [ -n "$VALUE" ]; then echo "$VALUE" | npx wrangler secret put "$NAME" --env production --config wrangler.toml; else echo "Skip $NAME (empty)"; fi; }
           put_secret "USERNAME"               "${{ secrets.USERNAME }}"
           put_secret "PASSWORD"               "${{ secrets.PASSWORD }}"
           put_secret "AIRTABLE_API_TOKEN"     "${{ secrets.AIRTABLE_API_TOKEN }}"
