@@ -1,26 +1,26 @@
-# ========== Worker 基本設定 ==========
+# ========= Worker =========
 name = "pet-republic-api"
 main = "src/index.js"
 compatibility_date = "2024-10-01"
 workers_dev = true
 
-# ========== R2 連線 ==========
+# ========= R2 =========
 [[r2_buckets]]
 binding = "R2_BUCKET"
 bucket_name = "my-images-bucket"
 
-# ========== D1 連線 ==========
+# ========= D1 =========
 [[d1_databases]]
+# 供程式碼使用與 workflow migrations 的 binding 名稱
 binding = "DATABASE"
+# 這裡改成你在 Cloudflare D1 主控台看到的資料庫「名稱」
 database_name = "image-db"
-# database_id 會在部署時自動填入
+# database_id 會在 deploy 時自動帶入
 
-# ========== 一般變數 ==========
+# ========= Vars =========
 [vars]
-# 上傳圖片大小上限（MB）
 MAX_IMAGE_MB = "20"
 
-# ========== 定時觸發（自動同步 Airtable） ==========
+# ========= Cron（Airtable 同步排程，可保留）=========
 [triggers]
-# 每 30 分鐘同步一次（可改成 */10 * * * * 代表每 10 分鐘）
 crons = ["*/30 * * * *"]
