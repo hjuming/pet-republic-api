@@ -1,512 +1,399 @@
-// src/index.js
-/**
- * 🐾 寵兒共和國 API（Pet Republic API）
- * - Cloudflare Workers (D1 + R2)
- * - Airtable → D1 products，同步圖片到 R2
- * - Cron：每 10 分觸發
- */
+// ======== 工具 ========
+const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8" };
+const ALLOW_ORIGIN = "*"; // 前台取用 API
 
-export default {
-  /**
-   * HTTP 入口
-   */
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-    const path = url.pathname;
-    const method = request.method;
+function ok(data, headers = {}) {
+  return new Response(JSON.stringify(data), {
+    headers: { ...JSON_HEADERS, "Access-Control-Allow-Origin": ALLOW_ORIGIN, ...headers },
+  });
+}
+function bad(msg, code = 400) {
+  return new Response(JSON.stringify({ ok: false, error: msg }), {
+    status: code,
+    headers: { ...JSON_HEADERS, "Access-Control-Allow-Origin": ALLOW_ORIGIN },
+  });
+}
+function notFound() { return bad("Not found", 404); }
+function methodNotAllowed() { return bad("Method not allowed", 405); }
 
-    // CORS 預處理
-    if (method === "OPTIONS") {
-      return corsResponse(env);
-    }
+function requireBasicAuth(req, env) {
+  const hdr = req.headers.get("Authorization") || "";
+  if (!hdr.startsWith("Basic ")) return false;
+  const [u, p] = atob(hdr.slice(6)).split(":");
+  return u === env.USERNAME && p === env.PASSWORD;
+}
 
-    try {
-      // 公開健康檢查
-      if (method === "GET" && path === "/health") {
-        return withCORS(
-          json({
-            ok: true,
-            service: "pet-republic-api",
-            time: new Date().toISOString(),
-            d1: !!env.DATABASE,
-            r2: !!env.R2_BUCKET,
-            maxImageMB: Number(env.MAX_IMAGE_MB || "20"),
-          }),
-          env
-        );
-      }
+function parseIntSafe(v, d = 0) {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? n : d;
+}
 
-      // 統計（需 Basic Auth）
-      if (method === "GET" && path === "/stats") {
-        await requireAuth(request, env);
-        const stats = await collectStats(env);
-        return withCORS(json({ ok: true, ...stats }), env);
-      }
+function sanitizeFilename(name) {
+  // 僅允許英數、.、-、_，避免目錄跳脫與奇異字元
+  return name.replace(/[^A-Za-z0-9._-]/g, "_");
+}
 
-      // Airtable 同步（需 Basic Auth）
-      if (method === "POST" && path === "/sync-airtable") {
-        await requireAuth(request, env);
+// ======== 後台頁面（/admin） ========
+function adminHtml() {
+  return `<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>寵兒共和國｜商品管理系統</title>
+<meta name="robots" content="noindex,nofollow"/>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>body{font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",sans-serif}</style>
+</head>
+<body class="bg-slate-50">
+<div class="max-w-6xl mx-auto p-6">
+  <header class="flex items-center justify-between mb-6">
+    <h1 class="text-2xl font-bold">寵兒共和國｜商品管理</h1>
+    <span class="text-sm text-slate-500">僅內部使用（Basic Auth）</span>
+  </header>
 
-        // 同步 Airtable → D1
-        const imported = await importFromAirtable(env, {
-          pageSize: 100,
-          maxPages: 10, // 最多抓 1000 筆/次，避免打太兇
-        });
+  <section class="mb-6 rounded-xl bg-white shadow p-4 border">
+    <h2 class="font-semibold mb-3">新增 / 更新商品</h2>
+    <form id="prodForm" class="grid md:grid-cols-2 gap-4">
+      <input required name="sku" placeholder="SKU（唯一）" class="border rounded p-2"/>
+      <input required name="name" placeholder="商品名稱" class="border rounded p-2"/>
+      <input name="brand" placeholder="品牌" class="border rounded p-2"/>
+      <input name="category" placeholder="分類" class="border rounded p-2"/>
+      <input name="price" placeholder="售價（NT$，自動轉分）" class="border rounded p-2" type="number" min="0"/>
+      <input name="compare_at_price" placeholder="原價（NT$）" class="border rounded p-2" type="number" min="0"/>
+      <input name="stock" placeholder="庫存數" class="border rounded p-2" type="number" min="0"/>
+      <select name="status" class="border rounded p-2">
+        <option value="active" selected>active</option>
+        <option value="draft">draft</option>
+        <option value="archived">archived</option>
+      </select>
+      <input name="tags" placeholder="標籤（逗號分隔）" class="border rounded p-2 md:col-span-2"/>
+      <input name="slug" placeholder="Slug（選填，不填自動）" class="border rounded p-2 md:col-span-2"/>
+      <textarea name="short_desc" placeholder="短描述" class="border rounded p-2 md:col-span-2"></textarea>
+      <textarea name="description" placeholder="詳細描述（可用 Markdown）" class="border rounded p-2 md:col-span-2"></textarea>
+      <textarea name="specs" placeholder='規格（JSON，例如：{"shape":"round"}）' class="border rounded p-2 md:col-span-2"></textarea>
+      <div class="md:col-span-2 flex gap-2">
+        <button class="px-4 py-2 rounded bg-teal-600 text-white" type="submit">儲存商品</button>
+        <button id="delBtn" class="px-4 py-2 rounded bg-rose-600 text-white" type="button">刪除商品</button>
+      </div>
+    </form>
+  </section>
 
-        // 抓圖上傳 R2（僅處理待抓取 N）
-        const imageLimit = 20;
-        const imageReport = await fetchAndStoreImages(env, { limit: imageLimit });
+  <section class="mb-6 rounded-xl bg-white shadow p-4 border">
+    <h2 class="font-semibold mb-3">上傳商品圖片</h2>
+    <form id="imgForm" class="flex flex-col md:flex-row gap-3 items-start">
+      <input required name="sku" placeholder="SKU" class="border rounded p-2"/>
+      <input name="filename" placeholder="檔名（例：main.jpg，留空沿用原檔名）" class="border rounded p-2"/>
+      <input type="file" accept="image/*" name="file" class="border rounded p-2"/>
+      <button class="px-4 py-2 rounded bg-indigo-600 text-white" type="submit">上傳</button>
+    </form>
+    <p class="text-sm text-slate-500 mt-2">R2 路徑：<code>https://image.wedo.pet/{SKU}/{filename}</code></p>
+  </section>
 
-        return withCORS(
-          json({
-            ok: true,
-            imported,
-            imageReport,
-          }),
-          env
-        );
-      }
+  <section class="rounded-xl bg-white shadow p-4 border">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="font-semibold">商品列表</h2>
+      <input id="q" placeholder="搜尋（SKU/名稱/品牌/分類）" class="border rounded p-2 w-64"/>
+    </div>
+    <div id="list" class="divide-y"></div>
+    <div class="flex gap-2 mt-3">
+      <button id="prev" class="px-3 py-1 rounded border">上一頁</button>
+      <button id="next" class="px-3 py-1 rounded border">下一頁</button>
+    </div>
+  </section>
+</div>
 
-      // 未匹配路由
-      return withCORS(json({ ok: false, error: "Not Found" }, 404), env);
-    } catch (err) {
-      console.error("Unhandled error:", err);
-      return withCORS(json({ ok: false, error: String(err?.message || err) }, 500), env);
-    }
-  },
+<script>
+const auth = { headers: { } }; // Basic Auth 由瀏覽器自動帶（因為是受保護頁面）
+let limit = 10, offset = 0;
 
-  /**
-   * Cron 入口（wrangler.toml 已設定 */10 * * * *）
-   */
-  async scheduled(event, env, ctx) {
-    // 以防未設 Secrets 時造成報錯：若沒有 token/base/table 就跳過
-    const hasAirtable =
-      !!env.AIRTABLE_API_TOKEN && !!env.AIRTABLE_BASE_ID && !!env.AIRTABLE_TABLE_NAME;
+async function reload() {
+  const q = document.getElementById('q').value || '';
+  const res = await fetch(\`/api/products?limit=\${limit}&offset=\${offset}&search=\${encodeURIComponent(q)}\`, auth);
+  const data = await res.json();
+  const list = document.getElementById('list');
+  list.innerHTML = (data.items || []).map(p => \`
+    <div class="py-2 flex items-start justify-between gap-4">
+      <div>
+        <div class="font-semibold">\${p.name} <span class="text-slate-500">(\${p.sku})</span></div>
+        <div class="text-sm text-slate-500">\${p.brand || ''} · \${p.category || ''} · \$\${(p.price/100).toFixed(0)}</div>
+        <div class="text-xs text-slate-400">status=\${p.status} · stock=\${p.stock}</div>
+      </div>
+      <button class="px-2 py-1 rounded border" onclick='fillForm(\${JSON.stringify(p)})'>載入</button>
+    </div>\`).join('');
+}
 
-    try {
-      if (hasAirtable) {
-        // ① Airtable → D1（溫和抓）
-        await importFromAirtable(env, { pageSize: 100, maxPages: 3 });
-      }
+function fillForm(p){
+  const f = document.getElementById('prodForm');
+  for (const k of ['sku','name','brand','category','slug','short_desc','description','tags','status']) {
+    if (f[k]) f[k].value = p[k] || '';
+  }
+  if (f.price) f.price.value = p.price ? Math.round(p.price/100) : '';
+  if (f.compare_at_price) f.compare_at_price.value = p.compare_at_price ? Math.round(p.compare_at_price/100) : '';
+  if (f.stock) f.stock.value = p.stock || 0;
+  if (f.specs) f.specs.value = p.specs ? JSON.stringify(p.specs,null,2) : '';
+}
 
-      // ② 抓圖到 R2（限制批量）
-      await fetchAndStoreImages(env, { limit: 20 });
-    } catch (err) {
-      console.error("[CRON] error:", err);
-    }
-  },
+document.getElementById('prev').onclick = ()=>{ offset = Math.max(0, offset - limit); reload(); };
+document.getElementById('next').onclick = ()=>{ offset += limit; reload(); };
+document.getElementById('q').oninput = ()=>{ offset=0; reload(); };
+
+document.getElementById('prodForm').onsubmit = async (e)=>{
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const sku = fd.get('sku').trim();
+  const body = {};
+  for (const [k,v] of fd.entries()) if (k!=='sku' && v!=='') body[k]=v;
+  if (body.price) body.price = parseInt(body.price,10)*100;
+  if (body.compare_at_price) body.compare_at_price = parseInt(body.compare_at_price,10)*100;
+  if (body.stock) body.stock = parseInt(body.stock,10);
+  if (body.specs) { try { body.specs = JSON.parse(body.specs); } catch{} }
+
+  const exists = await fetch(\`/api/products/\${encodeURIComponent(sku)}\`);
+  if (exists.ok) {
+    await fetch(\`/api/products/\${encodeURIComponent(sku)}\`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  } else {
+    await fetch('/api/products', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sku,...body})});
+  }
+  alert('已儲存'); reload();
 };
 
-/* ----------------------------- 工具函式區 ----------------------------- */
+document.getElementById('delBtn').onclick = async ()=>{
+  const sku = document.querySelector('#prodForm [name=sku]').value.trim();
+  if (!sku) return alert('請先填 SKU');
+  if (!confirm(\`確定刪除 \${sku}？\`)) return;
+  await fetch(\`/api/products/\${encodeURIComponent(sku)}\`, {method:'DELETE'});
+  alert('已刪除'); reload();
+};
 
-/**
- * 基本 JSON 回應
- */
-function json(obj, status = 200) {
-  return new Response(JSON.stringify(obj), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
+document.getElementById('imgForm').onsubmit = async (e)=>{
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  if (!fd.get('file') || !fd.get('sku')) return alert('請填 SKU 並選擇檔案');
+  const res = await fetch(\`/api/products/\${encodeURIComponent(fd.get('sku'))}/images\`, { method:'POST', body: fd });
+  const data = await res.json();
+  if (data.ok) { alert('上傳完成'); } else { alert('上傳失敗：'+(data.error||'unknown')); }
+};
+reload();
+</script>
+</body></html>`;
 }
 
-/**
- * 套用 CORS
- */
-function withCORS(res, env) {
-  const h = new Headers(res.headers);
-  const origin = env.CORS_ALLOW_ORIGIN || "*";
-  h.set("access-control-allow-origin", origin);
-  h.set("access-control-allow-headers", "authorization, content-type, x-requested-with");
-  h.set("access-control-allow-methods", "GET,POST,OPTIONS");
-  return new Response(res.body, { status: res.status, headers: h });
-}
-
-/**
- * 預檢回應
- */
-function corsResponse(env) {
-  return new Response(null, {
-    status: 204,
-    headers: {
-      "access-control-allow-origin": env.CORS_ALLOW_ORIGIN || "*",
-      "access-control-allow-headers": "authorization, content-type, x-requested-with",
-      "access-control-allow-methods": "GET,POST,OPTIONS",
-      "access-control-max-age": "600",
-    },
-  });
-}
-
-/**
- * Basic Auth（用於 /stats、/sync-airtable）
- */
-async function requireAuth(request, env) {
-  const hdr = request.headers.get("authorization") || "";
-  if (!hdr.startsWith("Basic ")) {
-    throwUnauthorized();
+// ======== API 實作 ========
+async function listProducts(env, { search, limit = 10, offset = 0 }) {
+  const _limit = parseIntSafe(limit, 10);
+  const _offset = parseIntSafe(offset, 0);
+  let where = [], params = [];
+  if (search) {
+    where.push("(sku LIKE ? OR name LIKE ? OR brand LIKE ? OR category LIKE ?)");
+    const s = `%${search}%`;
+    params.push(s, s, s, s);
   }
-  const creds = atob(hdr.slice(6));
-  const [user, pass] = creds.split(":");
-  if (!user || !pass) throwUnauthorized();
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const items = await env.DATABASE.prepare(`
+    SELECT sku,name,slug,brand,category,price,compare_at_price,status,stock,short_desc,description,specs,tags,updated_at
+    FROM products ${whereSql}
+    ORDER BY updated_at DESC
+    LIMIT ? OFFSET ?
+  `).bind(...params, _limit, _offset).all();
 
-  // 允許使用 USERNAME/PASSWORD 或 BASIC_AUTH_USERNAME/BASIC_AUTH_PASSWORD
-  const expectedUser = env.USERNAME || env.BASIC_AUTH_USERNAME;
-  const expectedPass = env.PASSWORD || env.BASIC_AUTH_PASSWORD;
+  const total = await env.DATABASE.prepare(`
+    SELECT COUNT(*) AS n FROM products ${whereSql}
+  `).bind(...params).first();
 
-  if (!expectedUser || !expectedPass) {
-    throw new Error("Auth not configured");
-  }
-  if (user !== expectedUser || pass !== expectedPass) {
-    throwUnauthorized();
-  }
+  // 轉型 JSON 欄位
+  const rows = (items.results || []).map(r => ({ ...r, specs: r.specs ? JSON.parse(r.specs) : null }));
+  return { ok: true, items: rows, total: total?.n ?? 0, limit: _limit, offset: _offset };
 }
 
-function throwUnauthorized() {
-  const res = new Response("Unauthorized", {
-    status: 401,
-    headers: { "WWW-Authenticate": 'Basic realm="pet-republic-api"' },
-  });
-  throw res;
+async function getProduct(env, sku) {
+  const row = await env.DATABASE.prepare(`
+    SELECT sku,name,slug,brand,category,price,compare_at_price,status,stock,short_desc,description,specs,tags,updated_at
+    FROM products WHERE sku = ?
+  `).bind(sku).first();
+  if (!row) return null;
+  row.specs = row.specs ? JSON.parse(row.specs) : null;
+  const images = await env.DATABASE.prepare(`
+    SELECT filename, r2_key, alt, sort FROM product_images WHERE sku = ? ORDER BY sort, id
+  `).bind(sku).all();
+  row.images = images.results || [];
+  return row;
 }
 
-/**
- * 統計：總數/成功/失敗/待處理
- */
-async function collectStats(env) {
-  const db = env.DATABASE;
-  const total = await db.prepare("SELECT COUNT(*) AS c FROM products").first();
-  const waiting = await db
-    .prepare("SELECT COUNT(*) AS c FROM products WHERE image_synced = 'N'")
-    .first();
-  const ok = await db
-    .prepare("SELECT COUNT(*) AS c FROM products WHERE image_synced = 'T'")
-    .first();
-  const fail = await db
-    .prepare("SELECT COUNT(*) AS c FROM products WHERE image_synced = 'F'")
-    .first();
-
-  return {
-    total: Number(total?.c || 0),
-    waiting: Number(waiting?.c || 0),
-    success: Number(ok?.c || 0),
-    failed: Number(fail?.c || 0),
+async function upsertProduct(env, data) {
+  const sku = (data.sku || "").trim();
+  if (!sku) throw new Error("缺少 sku");
+  const exists = await env.DATABASE.prepare(`SELECT 1 FROM products WHERE sku=?`).bind(sku).first();
+  const payload = {
+    name: data.name || "",
+    slug: data.slug || null,
+    brand: data.brand || null,
+    category: data.category || null,
+    price: parseIntSafe(data.price, 0),
+    compare_at_price: data.compare_at_price != null ? parseIntSafe(data.compare_at_price, null) : null,
+    status: data.status || "active",
+    stock: parseIntSafe(data.stock, 0),
+    short_desc: data.short_desc || null,
+    description: data.description || null,
+    specs: data.specs ? JSON.stringify(data.specs) : null,
+    tags: data.tags || null,
   };
-}
-
-/**
- * Airtable → D1
- */
-async function importFromAirtable(env, { pageSize = 100, maxPages = 10 } = {}) {
-  const token = env.AIRTABLE_API_TOKEN;
-  const base = env.AIRTABLE_BASE_ID;
-  const table = encodeURIComponent(env.AIRTABLE_TABLE_NAME || "");
-  if (!token || !base || !table) {
-    return { ok: false, reason: "Airtable secrets not configured" };
+  if (exists) {
+    await env.DATABASE.prepare(`
+      UPDATE products
+      SET name=?, slug=?, brand=?, category=?, price=?, compare_at_price=?, status=?, stock=?, short_desc=?, description=?, specs=?, tags=?
+      WHERE sku=?
+    `).bind(payload.name, payload.slug, payload.brand, payload.category, payload.price, payload.compare_at_price, payload.status, payload.stock, payload.short_desc, payload.description, payload.specs, payload.tags, sku).run();
+  } else {
+    await env.DATABASE.prepare(`
+      INSERT INTO products (sku,name,slug,brand,category,price,compare_at_price,status,stock,short_desc,description,specs,tags)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).bind(sku, payload.name, payload.slug, payload.brand, payload.category, payload.price, payload.compare_at_price, payload.status, payload.stock, payload.short_desc, payload.description, payload.specs, payload.tags).run();
   }
+  return sku;
+}
 
-  const endpoint = (offset) =>
-    `https://api.airtable.com/v0/${base}/${table}?pageSize=${pageSize}${
-      offset ? `&offset=${offset}` : ""
-    }`;
-
-  let page = 0;
-  let offset;
-  let imported = 0;
-
-  while (page < maxPages) {
-    page++;
-    const res = await fetch(endpoint(offset), {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) {
-      const txt = await res.text().catch(() => "");
-      throw new Error(`Airtable HTTP ${res.status}: ${txt}`);
-    }
-    const data = await res.json();
-
-    const records = Array.isArray(data.records) ? data.records : [];
-    if (records.length === 0) break;
-
-    for (const rec of records) {
-      const prepared = mapAirtableRecord(rec);
-      if (!prepared.sku) continue; // 沒有 SKU 的不入庫
-
-      // upsert into D1
-      await upsertProduct(env.DATABASE, prepared);
-      imported++;
-    }
-
-    offset = data.offset;
-    if (!offset) break; // 沒有下一頁
+async function deleteProduct(env, sku) {
+  // 刪除 images 表，R2 是否同時清除交給前端或另設批次（這裡示範同步刪）
+  const imgs = await env.DATABASE.prepare(`SELECT r2_key FROM product_images WHERE sku=?`).bind(sku).all();
+  for (const r of (imgs.results||[])) {
+    await env.R2_BUCKET.delete(r.r2_key);
   }
-
-  return { ok: true, imported, pages: page };
+  await env.DATABASE.prepare(`DELETE FROM product_images WHERE sku=?`).bind(sku).run();
+  await env.DATABASE.prepare(`DELETE FROM products WHERE sku=?`).bind(sku).run();
 }
 
-/**
- * 將 Airtable record 映射成 products 欄位
- */
-function mapAirtableRecord(rec) {
-  const f = rec?.fields || {};
+// 上傳圖片：multipart/form-data { file, filename? }
+async function uploadImage(env, sku, formData) {
+  const file = formData.get("file");
+  if (!file || !file.name) throw new Error("缺少檔案");
+  let filename = (formData.get("filename") || file.name).toString();
+  filename = sanitizeFilename(filename);
+  const key = `${sku}/${filename}`;
 
-  const pick = (...keys) => {
-    for (const k of keys) {
-      if (f[k] !== undefined && f[k] !== null && String(f[k]).trim() !== "") return f[k];
-    }
-    return null;
-  };
+  // 檔案大小檢查
+  const maxMB = parseInt(env.MAX_IMAGE_MB || "20", 10);
+  if (file.size > maxMB * 1024 * 1024) throw new Error(`檔案過大（>${maxMB}MB）`);
 
-  // 圖片欄可能是 attachments 陣列
-  const imageField = pick("圖片", "Image", "Images", "image", "images", "photo", "photos");
-  let imageUrl = null;
-  if (Array.isArray(imageField) && imageField.length > 0 && imageField[0]?.url) {
-    imageUrl = imageField[0].url;
-  } else if (typeof imageField === "string") {
-    imageUrl = imageField;
-  }
+  // 寫入 R2
+  await env.R2_BUCKET.put(key, await file.arrayBuffer(), {
+    httpMetadata: { contentType: file.type || "application/octet-stream" },
+  });
 
-  const obj = {
-    sku: String(pick("SKU", "Sku", "sku", "貨號", "編號") || "").trim(),
-    title: pick("商品名稱", "中文名稱", "Title", "名稱", "title"),
-    title_en: pick("英文名稱", "English Name", "title_en"),
-    brand: pick("品牌", "Brand", "brand"),
-    category: pick("類別", "Category", "category"),
-    description: pick("商品描述", "描述", "說明", "description"),
-    materials: pick("材質", "materials"),
-    case_pack_size: pick("包裝規格", "箱入數", "case_pack_size"),
-    msrp: pick("建議售價", "msrp", "MSRP"),
-    barcode: pick("條碼", "barcode", "EAN", "UPC"),
-    dimensions_cm: pick("尺寸(公分)", "尺寸_cm", "dimensions_cm"),
-    weight_g: pick("重量(公克)", "重量_g", "weight_g"),
-    origin: pick("產地", "origin"),
-    in_stock: normalizeBoolean(pick("有庫存", "in_stock", "庫存")),
-    airtable_image_url: imageUrl,
-    // image_file: 由抓圖流程寫入
-  };
+  // 寫入 DB（upsert）
+  await env.DATABASE.prepare(`
+    INSERT INTO product_images (sku,filename,r2_key) VALUES (?,?,?)
+    ON CONFLICT(sku,filename) DO UPDATE SET r2_key=excluded.r2_key
+  `).bind(sku, filename, key).run();
 
-  return obj;
+  return { filename, key, url: `https://image.wedo.pet/${encodeURIComponent(sku)}/${encodeURIComponent(filename)}` };
 }
 
-function normalizeBoolean(v) {
-  if (typeof v === "boolean") return v ? 1 : 0;
-  if (typeof v === "number") return v > 0 ? 1 : 0;
-  const s = String(v || "").trim().toLowerCase();
-  if (!s) return 1; // 預設有貨
-  return ["y", "yes", "true", "有", "1"].includes(s) ? 1 : 0;
+async function deleteImage(env, sku, filename) {
+  filename = sanitizeFilename(filename);
+  const key = `${sku}/${filename}`;
+  await env.R2_BUCKET.delete(key);
+  await env.DATABASE.prepare(`DELETE FROM product_images WHERE sku=? AND filename=?`).bind(sku, filename).run();
 }
 
-/**
- * D1 upsert
- */
-async function upsertProduct(db, p) {
-  // 若已存在，保留 image_synced 狀態；僅當 airtable_image_url 有變才重置 N
-  const row = await db
-    .prepare("SELECT airtable_image_url, image_synced FROM products WHERE sku = ?")
-    .bind(p.sku)
-    .first();
+// ======== 入口 ========
+export default {
+  async fetch(req, env, ctx) {
+    const url = new URL(req.url);
+    const { pathname, searchParams } = url;
 
-  let imageSynced = row?.image_synced || "N";
-  if (row && p.airtable_image_url && p.airtable_image_url !== row.airtable_image_url) {
-    imageSynced = "N"; // 來源圖變了，重抓
-  }
-
-  await db
-    .prepare(
-      `
-INSERT INTO products
-(sku, title, title_en, brand, category, description, materials, image_file, airtable_image_url, case_pack_size, msrp, barcode, dimensions_cm, weight_g, origin, in_stock, image_synced, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-ON CONFLICT(sku) DO UPDATE SET
-  title = excluded.title,
-  title_en = excluded.title_en,
-  brand = excluded.brand,
-  category = excluded.category,
-  description = excluded.description,
-  materials = excluded.materials,
-  -- image_file 保留已有值，抓圖流程會寫入
-  airtable_image_url = excluded.airtable_image_url,
-  case_pack_size = excluded.case_pack_size,
-  msrp = excluded.msrp,
-  barcode = excluded.barcode,
-  dimensions_cm = excluded.dimensions_cm,
-  weight_g = excluded.weight_g,
-  origin = excluded.origin,
-  in_stock = excluded.in_stock,
-  image_synced = ?,
-  updated_at = CURRENT_TIMESTAMP
-`
-    )
-    .bind(
-      p.sku,
-      p.title,
-      p.title_en,
-      p.brand,
-      p.category,
-      p.description,
-      p.materials,
-      null, // image_file 初始由抓圖流程覆寫
-      p.airtable_image_url,
-      p.case_pack_size,
-      p.msrp,
-      p.barcode,
-      p.dimensions_cm,
-      p.weight_g,
-      p.origin,
-      p.in_stock,
-      imageSynced
-    )
-    .run();
-}
-
-/**
- * 下載圖片 → 上傳 R2 → 更新 D1
- */
-async function fetchAndStoreImages(env, { limit = 20 } = {}) {
-  const db = env.DATABASE;
-  const r2 = env.R2_BUCKET;
-  const maxMB = Number(env.MAX_IMAGE_MB || "20");
-  const maxBytes = maxMB * 1024 * 1024;
-
-  const rows = await db
-    .prepare(
-      `
-SELECT sku, airtable_image_url
-FROM products
-WHERE image_synced = 'N'
-  AND airtable_image_url IS NOT NULL
-  AND TRIM(airtable_image_url) <> ''
-LIMIT ?
-`
-    )
-    .bind(limit)
-    .all();
-
-  const items = rows?.results || [];
-  let ok = 0,
-    fail = 0,
-    skipped = 0;
-
-  for (const it of items) {
-    const { sku, airtable_image_url } = it;
-    if (!isHttpUrl(airtable_image_url)) {
-      await markImage(db, sku, "F");
-      fail++;
-      continue;
-    }
-
-    try {
-      // 先 HEAD 看大小（不是所有來源都支援）
-      let contentLength = 0;
-      try {
-        const head = await fetch(airtable_image_url, { method: "HEAD" });
-        if (head.ok) {
-          const len = head.headers.get("content-length");
-          if (len) contentLength = Number(len);
-          if (contentLength && contentLength > maxBytes) {
-            await markImage(db, sku, "F", "TooLarge(HEAD)");
-            fail++;
-            continue;
-          }
-        }
-      } catch {
-        // ignore
-      }
-
-      // 下載
-      const res = await fetch(airtable_image_url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      // 若 HEAD 無長度，就用 ArrayBuffer 驗大小
-      const buf = await res.arrayBuffer();
-      if (buf.byteLength > maxBytes) {
-        await markImage(db, sku, "F", "TooLarge(Buffer)");
-        fail++;
-        continue;
-      }
-
-      const type = guessContentType(res.headers.get("content-type"), airtable_image_url);
-      const ext = extFromTypeOrUrl(type, airtable_image_url);
-      const key = `products/${encodeFileName(sku)}${ext}`;
-
-      // 上傳至 R2
-      await r2.put(key, new Uint8Array(buf), {
-        httpMetadata: { contentType: type || "application/octet-stream" },
+    // CORS preflight
+    if (req.method === "OPTIONS") {
+      return new Response(null, {
+        headers: {
+          "Access-Control-Allow-Origin": ALLOW_ORIGIN,
+          "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400",
+        },
       });
-
-      // 更新 D1
-      await db
-        .prepare(
-          `
-UPDATE products
-SET image_file = ?, image_synced = 'T', updated_at = CURRENT_TIMESTAMP
-WHERE sku = ?
-`
-        )
-        .bind(key, sku)
-        .run();
-
-      ok++;
-    } catch (e) {
-      console.error(`[image] ${sku} failed:`, e);
-      await markImage(db, sku, "F", String(e?.message || e));
-      fail++;
     }
-  }
 
-  return { total: items.length, ok, fail, skipped };
-}
+    // 後台頁（Basic Auth）
+    if (pathname === "/admin") {
+      if (!requireBasicAuth(req, env)) {
+        return new Response("Unauthorized", { status: 401, headers: { "WWW-Authenticate": 'Basic realm="admin"' } });
+      }
+      return new Response(adminHtml(), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
 
-async function markImage(db, sku, status = "F", reason) {
-  await db
-    .prepare(
-      `UPDATE products SET image_synced = ?, updated_at = CURRENT_TIMESTAMP WHERE sku = ?`
-    )
-    .bind(status, sku)
-    .run();
-  if (reason) {
-    // 可選：你若想記錄錯誤原因，之後可加一個 image_error 欄位
-    // 這裡先留註解避免打破結構
-  }
-}
+    // 健康檢查
+    if (pathname === "/api/health") return ok({ ok: true, ts: Date.now() });
 
-function isHttpUrl(u) {
-  try {
-    const x = new URL(String(u));
-    return x.protocol === "http:" || x.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
+    // === 商品列表 ===
+    if (pathname === "/api/products" && req.method === "GET") {
+      const search = searchParams.get("search") || "";
+      const limit = searchParams.get("limit") || "10";
+      const offset = searchParams.get("offset") || "0";
+      const data = await listProducts(env, { search, limit, offset });
+      return ok(data);
+    }
 
-function guessContentType(headerType, url) {
-  if (headerType && headerType.includes("/")) return headerType.toLowerCase();
-  const u = String(url || "").toLowerCase();
-  if (u.endsWith(".jpg") || u.endsWith(".jpeg")) return "image/jpeg";
-  if (u.endsWith(".png")) return "image/png";
-  if (u.endsWith(".webp")) return "image/webp";
-  if (u.endsWith(".gif")) return "image/gif";
-  return "application/octet-stream";
-}
+    // === 新增商品（後台） ===
+    if (pathname === "/api/products" && req.method === "POST") {
+      if (!requireBasicAuth(req, env)) return bad("Unauthorized", 401);
+      const body = await req.json().catch(()=> ({}));
+      try {
+        const sku = await upsertProduct(env, body);
+        const item = await getProduct(env, sku);
+        return ok({ ok: true, item });
+      } catch (e) { return bad(e.message || "invalid", 400); }
+    }
 
-function extFromTypeOrUrl(type, url) {
-  if (!type && url) {
-    const u = url.toLowerCase();
-    if (u.endsWith(".jpg") || u.endsWith(".jpeg")) return ".jpg";
-    if (u.endsWith(".png")) return ".png";
-    if (u.endsWith(".webp")) return ".webp";
-    if (u.endsWith(".gif")) return ".gif";
-  }
-  if (!type) return "";
-  if (type.includes("jpeg")) return ".jpg";
-  if (type.includes("png")) return ".png";
-  if (type.includes("webp")) return ".webp";
-  if (type.includes("gif")) return ".gif";
-  return "";
-}
+    // /api/products/:sku
+    const productMatch = pathname.match(/^\/api\/products\/([^/]+)$/);
+    if (productMatch) {
+      const sku = decodeURIComponent(productMatch[1]);
+      if (req.method === "GET") {
+        const item = await getProduct(env, sku);
+        return item ? ok(item) : notFound();
+      }
+      if (req.method === "PUT") {
+        if (!requireBasicAuth(req, env)) return bad("Unauthorized", 401);
+        const body = await req.json().catch(()=> ({}));
+        try {
+          await upsertProduct(env, { ...body, sku });
+          const item = await getProduct(env, sku);
+          return ok({ ok: true, item });
+        } catch (e) { return bad(e.message || "invalid", 400); }
+      }
+      if (req.method === "DELETE") {
+        if (!requireBasicAuth(req, env)) return bad("Unauthorized", 401);
+        await deleteProduct(env, sku);
+        return ok({ ok: true });
+      }
+      return methodNotAllowed();
+    }
 
-function encodeFileName(s) {
-  // 移除不適合檔名的字元
-  return String(s || "")
-    .trim()
-    .replace(/[^\p{L}\p{N}\-_\.]/gu, "_")
-    .slice(0, 128);
-}
+    // /api/products/:sku/images（POST 上傳）
+    const imgUploadMatch = pathname.match(/^\/api\/products\/([^/]+)\/images$/);
+    if (imgUploadMatch) {
+      const sku = decodeURIComponent(imgUploadMatch[1]);
+      if (req.method !== "POST") return methodNotAllowed();
+      if (!requireBasicAuth(req, env)) return bad("Unauthorized", 401);
+      const form = await req.formData();
+      try {
+        const out = await uploadImage(env, sku, form);
+        return ok({ ok: true, ...out });
+      } catch (e) { return bad(e.message || "upload failed", 400); }
+    }
+
+    // /api/products/:sku/images/:filename（DELETE）
+    const imgDelMatch = pathname.match(/^\/api\/products\/([^/]+)\/images\/([^/]+)$/);
+    if (imgDelMatch) {
+      const sku = decodeURIComponent(imgDelMatch[1]);
+      const filename = decodeURIComponent(imgDelMatch[2]);
+      if (req.method !== "DELETE") return methodNotAllowed();
+      if (!requireBasicAuth(req, env)) return bad("Unauthorized", 401);
+      await deleteImage(env, sku, filename);
+      return ok({ ok: true });
+    }
+
+    return notFound();
+  },
+};
