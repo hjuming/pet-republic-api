@@ -1,11 +1,11 @@
-name: Deploy
+name: Deploy Pet Republic API
 
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
 
-# 避免併發部署踩到彼此
+# 🧩 避免併發部署
 concurrency:
   group: pet-republic-api-deploy
   cancel-in-progress: true
@@ -14,7 +14,6 @@ permissions:
   contents: read
 
 env:
-  # Cloudflare 帳號與 API Token 來自 GitHub Secrets
   CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
   CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
@@ -23,7 +22,10 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: ⬇️ Checkout
+      # ==========================================================
+      # 1️⃣ 準備環境
+      # ==========================================================
+      - name: ⬇️ Checkout repository
         uses: actions/checkout@v4
 
       - name: 🔧 Setup Node.js
@@ -35,15 +37,37 @@ jobs:
       - name: 📦 Install dependencies
         run: npm ci
 
-      - name: 🚀 Wrangler deploy
+      # ==========================================================
+      # 2️⃣ 部署 Worker
+      # ==========================================================
+      - name: 🚀 Deploy Worker to Cloudflare
         run: npx wrangler deploy
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ env.CLOUDFLARE_API_TOKEN }}
 
-      # 將以下 Secrets（如有提供）寫入 Cloudflare Worker。
-      # 這些名稱要與程式內使用的 env.* 相同。
-      - name: 🔐 Upload Worker secrets (if provided)
+      # ==========================================================
+      # 3️⃣ 自動執行 D1 Migrations
+      # ==========================================================
+      - name: 🗄️ Run D1 migrations (remote)
+        run: |
+          if [ -d "migrations" ]; then
+            echo "Detected migrations folder, executing SQL files..."
+            for f in migrations/*.sql; do
+              echo "→ Applying migration: $f"
+              npx wrangler d1 execute image-db --remote --file "$f"
+            done
+          else
+            echo "No migrations folder found. Skipping."
+          fi
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ env.CLOUDFLARE_API_TOKEN }}
+
+      # ==========================================================
+      # 4️⃣ 設定 Secrets（安全可重複）
+      # ==========================================================
+      - name: 🔐 Upload Worker secrets (idempotent)
         shell: bash
         run: |
           set -euo pipefail
@@ -53,7 +77,6 @@ jobs:
             local VALUE="$2"
             if [ -n "${VALUE}" ]; then
               echo "• putting secret: ${NAME}"
-              # 以 stdin 方式寫入，重覆執行也安全
               printf '%s' "${VALUE}" | npx wrangler secret put "${NAME}" --quiet
             else
               echo "• skip ${NAME} (not provided)"
@@ -71,7 +94,15 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ env.CLOUDFLARE_API_TOKEN }}
 
-      - name: ✅ Summary
+      # ==========================================================
+      # 5️⃣ 部署摘要
+      # ==========================================================
+      - name: ✅ Deployment summary
         run: |
-          echo "Deployed to workers.dev (and your custom domain if routed in dashboard)."
-          echo "Worker: pet-republic-api"
+          echo "============================================"
+          echo "🚀 Pet Republic API 已成功部署"
+          echo "Worker 名稱：pet-republic-api"
+          echo "D1 資料庫：image-db"
+          echo "R2 儲存桶：my-images-bucket"
+          echo "自動執行 migrations 完成"
+          echo "============================================"
