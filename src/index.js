@@ -1,33 +1,162 @@
 /**
- * 真正執行 Airtable 同步的核心邏輯
- * (注意：這裡的實作是下一個步驟，目前我們先專注於呼叫它)
+ * ✅ 
+ * * @param {object} env - Worker 
  */
 async function syncAirtable(env) {
-  console.log(`[${new Date().toISOString()}] 正在執行 syncAirtable 函式...`);
-  
-  // ===================================================
-  // 
-  // 
-  // 
-  // 
-  //   
-  // 
-  // 
-  //   
-  // 
-  // 
-  // 
-  // ===================================================
+  const startTime = Date.now();
+  console.log(`[syncAirtable] 開始執行同步... (Base: ${env.AIRTABLE_BASE_ID}, Table: ${env.AIRTABLE_TABLE_NAME})`);
 
-  // 回傳一個簡單的日誌訊息
-  const result = {
-    ok: true,
-    message: "已觸發同步 (此為示範邏輯，尚未實作真實抓取)",
-    timestamp: new Date().toISOString(),
-  };
+  let allRecords = [];
+  let offset = null;
+  const airtableUrl = new URL(`https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${env.AIRTABLE_TABLE_NAME}`);
   
-  console.log(JSON.stringify(result));
-  return result;
+  // 
+  airtableUrl.searchParams.set('view', 'Grid view'); // 
+  airtableUrl.searchParams.set('pageSize', 100);
+
+  try {
+    // === 1. 
+    // Airtable API 
+    do {
+      if (offset) {
+        airtableUrl.searchParams.set('offset', offset);
+      }
+      
+      console.log(`[syncAirtable] 正在抓取 Airtable 頁面... (offset: ${offset})`);
+      const res = await fetch(airtableUrl.href, {
+        headers: {
+          'Authorization': `Bearer ${env.AIRTABLE_API_TOKEN}`,
+        },
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(`Airtable API 錯誤: ${res.status} ${res.statusText} - ${errorText}`);
+      }
+
+      const data = await res.json();
+      allRecords.push(...data.records);
+      offset = data.offset;
+
+    } while (offset);
+    
+    console.log(`[syncAirtable] 已抓取總共 ${allRecords.length} 筆 Airtable 紀錄。`);
+
+    if (allRecords.length === 0) {
+      console.log("[syncAirtable] 沒有抓到任何資料，同步中止。");
+      return { ok: true, message: "Airtable 中沒有資料，同步中止。", recordsFetched: 0 };
+    }
+
+    // === 2. 
+    const productStmts = [];
+    const imageStmts = [];
+
+    // 
+    const productInsert = env.DATABASE.prepare(
+      `INSERT OR REPLACE INTO products (sku, name, brand, status, raw_json) 
+       VALUES (?, ?, ?, ?, ?)`
+    );
+    
+    const imageInsert = env.DATABASE.prepare(
+      `INSERT OR REPLACE INTO product_images (sku, filename, url, width, height, variant) 
+       VALUES (?, ?, ?, ?, ?, ?)`
+    );
+    
+    // 
+    const skusInAirtable = new Set();
+
+    for (const record of allRecords) {
+      const fields = record.fields;
+      
+      // ✅ 
+      if (!fields['商品貨號']) {
+        console.warn(`[syncAirtable] 偵測到一筆紀錄缺少 '商品貨號'，已跳過: ${record.id}`);
+        continue;
+      }
+
+      const sku = String(fields['商品貨號']).trim();
+      skusInAirtable.add(sku);
+
+      // 2a. 
+      productStmts.push(
+        productInsert.bind(
+          sku,
+          fields['產品名稱'] || null, // ✅ 
+          fields['品牌名稱'] || null, // ✅ 
+          fields['現貨商品'] || 'draft', // ✅ 
+          JSON.stringify(fields) // 
+        )
+      );
+      
+      // 2b. 
+      if (fields['商品圖檔'] && Array.isArray(fields['商品圖檔'])) { // ✅ 
+        let variantCounter = 1;
+        for (const img of fields['商品圖檔']) { // ✅ 
+          if (img.url && img.filename) {
+            imageStmts.push(
+              imageInsert.bind(
+                sku,
+                img.filename,
+                img.url,
+                img.width || null,
+                img.height || null,
+                `v${variantCounter++}` // 
+              )
+            );
+          }
+        }
+      }
+    }
+    
+    // === 3. 
+    // 
+    // 
+    // 
+    
+    // 
+    const imageSkus = Array.from(skusInAirtable).map(sku => `?`).join(',');
+    const deleteOldImagesStmt = env.DATABASE.prepare(
+      `DELETE FROM product_images WHERE sku IN (${imageSkus})`
+    ).bind(...skusInAirtable);
+
+    console.log(`[syncAirtable] 準備執行 D1 批次處理... (Products: ${productStmts.length}, Images: ${imageStmts.length}, DeleteStmts: 1)`);
+
+    // 
+    // 
+    const allStmts = [
+      deleteOldImagesStmt, // 
+      ...productStmts,     // 
+      ...imageStmts        // 
+    ];
+
+    const results = await env.DATABASE.batch(allStmts);
+    
+    const endTime = Date.now();
+    const duration = (endTime - startTime) / 1000;
+
+    console.log(`[syncAirtable] D1 批次處理完成！`, results);
+
+    const finalResult = {
+      ok: true,
+      message: "Airtable 同步 D1 成功！",
+      recordsFetched: allRecords.length,
+      productsUpserted: productStmts.length,
+      imagesUpserted: imageStmts.length,
+      duration_seconds: duration,
+      timestamp: new Date().toISOString(),
+    };
+    
+    console.log(JSON.stringify(finalResult));
+    return finalResult;
+
+  } catch (err) {
+    console.error(`[syncAirtable] 同步過程中發生嚴重錯誤: ${err.message}`, err.stack);
+    return {
+      ok: false,
+      message: `同步失敗: ${err.message}`,
+      timestamp: new Date().toISOString(),
+    };
+  }
 }
 
 
@@ -59,13 +188,12 @@ export default {
         return new Response(res.body, { status: res.status, headers: h });
       };
 
-      // ✅ 
       if (request.method === "OPTIONS") {
         return new Response(null, {
           headers: {
             "access-control-allow-origin": "*",
             "access-control-allow-headers": "authorization,content-type",
-            "access-control-allow-methods": "GET,POST,OPTIONS", // <--- 
+            "access-control-allow-methods": "GET,POST,OPTIONS",
           },
         });
       }
@@ -103,7 +231,7 @@ export default {
             ],
             protected_basic_auth: [
               "GET /admin -> admin html",
-              "POST /sync-airtable -> trigger import (placeholder)",
+              "POST /sync-airtable -> trigger import",
             ],
           },
         });
@@ -163,7 +291,7 @@ export default {
         // 
         // 
         const result = await syncAirtable(env);
-        return json(result);
+        return json(result, result.ok ? 200 : 500);
       }
 
       // 產品列表
@@ -210,7 +338,7 @@ export default {
       const fileMatch = path.match(/^\/([^/]+)\/([^/]+)$/);
       if (request.method === "GET" && fileMatch) {
         const bucketKey = `${decodeURIComponent(fileMatch[1])}/${decodeURIComponent(fileMatch[2])}`;
-        const obj = await env.R2_BUCKET.get(obj);
+        const obj = await env.R2_BUCKET.get(bucketKey); 
         if (!obj) return text("Not Found", 404);
         const headers = new Headers();
         if (obj.httpMetadata?.contentType) headers.set("content-type", obj.httpMetadata.contentType);
