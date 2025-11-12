@@ -1,10 +1,13 @@
-/* V2: 
+/* V3: 
+  - 
   - 
 */
 
 -- 
 DROP TABLE IF EXISTS product_images;
 DROP TABLE IF EXISTS products;
+DROP TABLE IF EXISTS _sync_log;       -- ✅ 
+DROP TABLE IF EXISTS _schema_versions; -- ✅ 
 
 -- 
 CREATE TABLE products (
@@ -12,7 +15,7 @@ CREATE TABLE products (
   name TEXT,
   brand TEXT,
   status TEXT,
-  raw_json TEXT  -- ✅ 
+  raw_json TEXT  
 );
 
 -- 
