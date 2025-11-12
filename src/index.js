@@ -404,7 +404,6 @@ const ADMIN_HTML = `
 </script>`;
 
 // ✅ 
-// 
 const CATALOG_HTML = \`
 <!doctype html>
 <html lang="zh-Hant">
@@ -445,9 +444,24 @@ const CATALOG_HTML = \`
 </main>
 
 <script>
+// ✅ 
 const state = { page: 1, size: 20, q: "", total: 0 };
 const $ = (id)=>document.getElementById(id);
 const cards = $("cards");
+
+// 
+function escapeHTML(str) {
+  if (str === null || str === undefined) return "";
+  return String(str).replace(/[&<>"']/g, function(m) {
+    return {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }[m];
+  });
+}
 
 function render(items){
   cards.innerHTML = "";
@@ -459,22 +473,22 @@ function render(items){
     const box = document.createElement("div");
     box.className = "rounded-xl bg-white shadow p-4 flex flex-col gap-2";
     
-    // ✅ 
+    // 
     const raw = JSON.parse(p.raw_json || "{}");
     const category = raw['類別'] || "-"; // 
     
     // ✅ 
     const img = (p.first_image_url) 
-      ? '<img src="' + p.first_image_url + '" class="w-full aspect-square object-cover rounded-lg border"/>' 
+      ? '<img src="' + escapeHTML(p.first_image_url) + '" class="w-full aspect-square object-cover rounded-lg border"/>' 
       : '<div class="w-full aspect-square bg-gray-100 rounded-lg border flex items-center justify-center text-gray-400">沒有圖片</div>';
       
     // ✅ 
     box.innerHTML = 
       img +
-      '<div class="text-sm text-gray-500">' + (p.brand || "-") + '｜' + category + '</div>' +
-      '<div class="text-lg font-bold">' + p.sku + '</div>' +
-      '<div class="text-base h-12 overflow-hidden">' + (p.name || "") + '</div>' +
-      '<div class="text-sm text-gray-500">狀態：' + (p.status || "-") + '</div>';
+      '<div class="text-sm text-gray-500">' + escapeHTML(p.brand || "-") + '｜' + escapeHTML(category) + '</div>' +
+      '<div class="text-lg font-bold">' + escapeHTML(p.sku) + '</div>' +
+      '<div class="text-base h-12 overflow-hidden">' + escapeHTML(p.name || "") + '</div>' +
+      '<div class="text-sm text-gray-500">狀態：' + escapeHTML(p.status || "-") + '</div>';
       
     cards.appendChild(box);
   }
@@ -492,7 +506,7 @@ async function load(){
   const data = await res.json();
   
   if (!data.ok) {
-    cards.innerHTML = '<div class="text-red-500">API 錯誤: ' + data.error + '</div>';
+    cards.innerHTML = '<div class="text-red-500">API 錯誤: ' + escapeHTML(data.error) + '</div>';
     return;
   }
 
@@ -507,7 +521,7 @@ async function load(){
   $("prev").disabled = (meta.page <= 1);
   $("next").disabled = (meta.page * meta.size >= meta.total);
   
-  // ✅ 
+  // 
   const start = (meta.page - 1) * meta.size + 1;
   const end = Math.min(meta.page * meta.size, meta.total);
   $("summary").textContent = '顯示 ' + start + ' - ' + end + ' 筆，共 ' + meta.total + ' 筆商品';
