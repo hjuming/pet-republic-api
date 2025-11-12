@@ -371,7 +371,7 @@ export default {
 };
 
 // --- HTML 
-const ADMIN_HTML = `
+const ADMIN_HTML = \`
 <!doctype html><meta charset="utf-8">
 <title>Pet Republic｜後台</title>
 <style>
@@ -401,7 +401,7 @@ const ADMIN_HTML = `
       btn.disabled = false;
     }
   }
-</script>`;
+</script>\`;
 
 // ✅ 
 // 
